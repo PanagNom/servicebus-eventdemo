@@ -1,6 +1,21 @@
 @OrderService_HostAddress = http://localhost:5085
 
-GET {{OrderService_HostAddress}}/weatherforecast/
-Accept: application/json
+### Place an order
+POST {{OrderService_HostAddress}}/orders
+Content-Type: application/json
 
-###
+{
+  "productId": "SKU-123",
+  "quantity": 2,
+  "customerId": "cust-42",
+  "customerEmail": "test.customer@example.com",
+  "shippingAddress": "1 Test Street, Athens",
+  "billingAddress": "1 Test Street, Athens",
+  "paymentMethod": "card",
+  "totalAmount": 59.90,
+  "currency": "EUR"
+}
+
+### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
+GET {{OrderService_HostAddress}}/debug/peek
+Accept: application/json
