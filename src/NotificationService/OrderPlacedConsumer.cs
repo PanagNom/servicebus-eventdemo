@@ -58,6 +58,11 @@ public class OrderPlacedConsumer : BackgroundService
             _logger.LogInformation("Received OrderPlacedEvent: {OrderId}, {CustomerId}, {DeliveryCount}, {CorrelationId}, {Subject}",
             orderPlacedEvent.OrderId, orderPlacedEvent.CustomerId, message.DeliveryCount, message.CorrelationId, message.Subject);
 
+            // TEST HOOK
+            if (orderPlacedEvent.CustomerId == "poison")
+            {
+                throw new InvalidOperationException("Simulated exception for testing poison message handling.");
+            }
             // Here you can add logic to send an email notification or any other processing
 
             // Complete the message so that it is not received again.

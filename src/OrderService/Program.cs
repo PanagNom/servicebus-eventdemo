@@ -69,7 +69,10 @@ app.MapGet("/debug/peek-dlq", async (ServiceBusClient client) =>
     {
         DeadLetterReason = m.DeadLetterReason,
         DeadLetterErrorDescription = m.DeadLetterErrorDescription,
-        DeliveryCount = m.DeliveryCount
+        DeliveryCount = m.DeliveryCount,
+        MessageId = m.MessageId,
+        EnqueuedTime = m.EnqueuedTime,
+        Body = m.Body.ToString(),
     });
 });
 

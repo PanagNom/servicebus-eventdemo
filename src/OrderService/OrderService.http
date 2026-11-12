@@ -15,11 +15,25 @@ Content-Type: application/json
   "totalAmount": 59.90,
   "currency": "EUR"
 }
+### Place an order poison
+POST {{OrderService_HostAddress}}/orders
+Content-Type: application/json
 
+{
+  "productId": "SKU-123",
+  "quantity": 2,
+  "customerId": "poison",
+  "customerEmail": "test.customer@example.com",
+  "shippingAddress": "1 Test Street, Athens",
+  "billingAddress": "1 Test Street, Athens",
+  "paymentMethod": "card",
+  "totalAmount": 59.90,
+  "currency": "EUR"
+}
 ### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
 GET {{OrderService_HostAddress}}/debug/peek
 Accept: application/json
 
-### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
+### Peek at messages waiting in the dead-letter queue (DLQ) for the "notifications" subscription (doesn't remove them)
 GET {{OrderService_HostAddress}}/debug/peek-dlq
 Accept: application/json
