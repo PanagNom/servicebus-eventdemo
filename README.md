@@ -401,3 +401,11 @@ docker compose down
 | **Tolerant reader**                | A consumer that ignores fields it doesn't know, so additive changes are safe                                              |
 
 ---
+
+## 11. The 60-second interview version
+
+> "I built two small ASP.NET Core services that communicate through Azure Service Bus, running against the local emulator in Docker. OrderService exposes a POST endpoint, publishes an `OrderPlaced` event to a topic and returns 202, because the downstream work happens asynchronously. Metadata like the subject, correlation id and schema version goes in message properties, and the `MessageId` is the order id so duplicates can be recognized. NotificationService runs a `ServiceBusProcessor` in a background service, receives in peek-lock mode and only completes a message after the work succeeds.
+>
+> Then I broke it on purpose. With the consumer offline, messages waited in the subscription. A handler that throws gets abandoned and retried immediately until the message is dead-lettered after three attempts, while a crash only causes redelivery once the lock expires. Bad data is dead-lettered straight away, because retrying a permanent failure is pointless. A crash after the work but before completing causes a redelivery, so the consumer is idempotent on `MessageId`. That's different from the broker's duplicate detection, which only catches repeated sends. I also added a second subscription to show fan-out without touching the publisher.
+>
+> In production I'd make two changes. The processed-message store would be a shared database table, because instances of a service can receive each other's redeliveries. And I'd add a transactional outbox, because saving the order and publishing the event are two separate systems with no shared transaction."
