@@ -19,3 +19,7 @@ Content-Type: application/json
 ### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
 GET {{OrderService_HostAddress}}/debug/peek
 Accept: application/json
+
+### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
+GET {{OrderService_HostAddress}}/debug/peek-dlq
+Accept: application/json
