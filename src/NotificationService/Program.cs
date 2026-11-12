@@ -8,6 +8,7 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<ServiceBusClient>().Cr
     AutoCompleteMessages = false,
     MaxConcurrentCalls = 1
 }));
+builder.Services.AddSingleton<IProcessedMessageStore, InMemoryProcessedMessageStore>();
 builder.Services.AddHostedService<OrderPlacedConsumer>();
 
 var app = builder.Build();

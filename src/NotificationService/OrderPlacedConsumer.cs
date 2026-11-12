@@ -7,11 +7,13 @@ using Contracts;
 public class OrderPlacedConsumer : BackgroundService
 {
     private readonly ServiceBusProcessor _processor;
+    private readonly IProcessedMessageStore _processedStore;
     private readonly ILogger<OrderPlacedConsumer> _logger;
 
-    public OrderPlacedConsumer(ServiceBusProcessor processor, ILogger<OrderPlacedConsumer> logger)
+    public OrderPlacedConsumer(ServiceBusProcessor processor, IProcessedMessageStore processedStore, ILogger<OrderPlacedConsumer> logger)
     {
         _processor = processor;
+        _processedStore = processedStore;
         _logger = logger;
     }
 
@@ -58,12 +60,37 @@ public class OrderPlacedConsumer : BackgroundService
             _logger.LogInformation("Received OrderPlacedEvent: {OrderId}, {CustomerId}, {DeliveryCount}, {CorrelationId}, {Subject}",
             orderPlacedEvent.OrderId, orderPlacedEvent.CustomerId, message.DeliveryCount, message.CorrelationId, message.Subject);
 
-            // TEST HOOK
+            // Idempotency: a redelivered message we already handled is skipped, but still
+            // completed. Otherwise it would keep coming back until it was dead-lettered.
+            if (_processedStore.HasBeenProcessed(message.MessageId))
+            {
+                _logger.LogInformation("Duplicate {MessageId} (delivery {DeliveryCount}), skipping", message.MessageId, message.DeliveryCount);
+                await args.CompleteMessageAsync(message, args.CancellationToken);
+                return;
+            }
+
+            // TEST HOOK: always throws, so the message is retried and then dead-lettered.
             if (orderPlacedEvent.CustomerId == "poison")
             {
                 throw new InvalidOperationException("Simulated exception for testing poison message handling.");
             }
-            // Here you can add logic to send an email notification or any other processing
+
+            // The "work": in a real service, this would send the confirmation email.
+            _logger.LogInformation("EMAIL SENT for order {OrderId}", orderPlacedEvent.OrderId);
+
+            // Mark AFTER the work. If we crash between the work and this line, the message
+            // is redelivered and the work runs again: a duplicate, but nothing is lost.
+            // Marking BEFORE the work would risk losing the email instead.
+            _processedStore.MarkProcessed(message.MessageId);
+
+            // TEST HOOK: simulates the work succeeding but Complete never reaching the broker
+            // (for example a network blip or lost lock). The lock expires after LockDuration
+            // (30 s) and the message is redelivered.
+            if (orderPlacedEvent.CustomerId == "flaky" && message.DeliveryCount == 1)
+            {
+                _logger.LogWarning("TEST HOOK: not completing {MessageId}; expect redelivery after the lock expires", message.MessageId);
+                return;
+            }
 
             // Complete the message so that it is not received again.
             await args.CompleteMessageAsync(message, args.CancellationToken);
