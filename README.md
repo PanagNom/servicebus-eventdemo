@@ -2,13 +2,13 @@
 
 > A practice project for interview prep. It's small on purpose: the aim is to _understand_ event-driven messaging well enough to explain it, not to build a real shop.
 
-**Stack:** .NET 10 · ASP.NET Core minimal APIs · `Azure.Messaging.ServiceBus` · Azure Service Bus emulator (Docker)
+**Stack:** .NET 10 · ASP.NET Core minimal APIs · `Azure.Messaging.ServiceBus` · Azure Service Bus emulator · Docker Compose (Docker Desktop or Rancher Desktop)
 
 ---
 
 ## 1. The one-sentence version
 
-**OrderService** takes an order over HTTP and announces _"an order was placed"_. **NotificationService** hears that announcement and reacts, for example by "sending" a confirmation email. The two services never call each other. They only talk through **Azure Service Bus**, which runs locally in Docker.
+**OrderService** takes an order over HTTP and announces _"an order was placed"_. **NotificationService** hears that announcement and reacts, for example by "sending" a confirmation email. The two services never call each other. They only talk through **Azure Service Bus**. The broker and both services run locally as Docker containers.
 
 ---
 
@@ -49,25 +49,30 @@ The price you pay is **eventual consistency** and **at-least-once delivery**. Se
 ## 3. The pieces
 
 ```
-┌──────────────────────────── your machine ─────────────────────────────┐
-│                                                                        │
-│  ┌──────────────┐                                ┌───────────────────┐ │
-│  │ OrderService │                                │NotificationService│ │
-│  │  (web API)   │                                │  (background      │ │
-│  │ POST /orders │                                │   processor)      │ │
-│  └──────┬───────┘                                └─────────▲─────────┘ │
-│         │ send OrderPlacedEvent                           │ receive    │
-│         │ (AMQP, port 5672)                               │ (AMQP)     │
-│  ┌──────▼──────────────── Docker ────────────────────────┴─────────┐  │
-│  │  servicebus-emulator                                             │  │
-│  │    namespace: sbemulatorns                                       │  │
-│  │      topic: orders ──┬── subscription: notifications ───────────┘  │
-│  │                      └── subscription: audit ──▶ 2nd consumer      │
-│  │                                                                     │
-│  │  mssql  ← where the emulator stores messages and their state       │
-│  └─────────────────────────────────────────────────────────────────────┘
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────── your machine ───────────────────────────────┐
+│                                                                            │
+│  client (.http file / curl) ──▶ localhost:5085                             │
+│                                       │ port mapping 5085 → 8080           │
+│  ┌─ Docker network "sb-emulator" ─────┼────────────────────────────────┐   │
+│  │                                    │                                │   │
+│  │  ┌───────────────────────┐         │       ┌──────────────────────┐ │   │
+│  │  │ order-service         │◀────────┘       │ notification-service │ │   │
+│  │  │ POST /orders          │                 │ background processor │ │   │
+│  │  └──────────┬────────────┘                 └──────────▲───────────┘ │   │
+│  │             │ send OrderPlacedEvent                   │ receive     │   │
+│  │             │ (AMQP, sb://sb-emulator:5672)           │ (AMQP)      │   │
+│  │  ┌──────────▼─────────────────────────────────────────┴───────────┐ │   │
+│  │  │ servicebus-emulator                                            │ │   │
+│  │  │   namespace: sbemulatorns                                      │ │   │
+│  │  │     topic: orders ──┬── subscription: notifications            │ │   │
+│  │  │                     └── subscription: audit ──▶ 2nd consumer   │ │   │
+│  │  └────────────────────────────────────────────────────────────────┘ │   │
+│  │  mssql  ← where the emulator stores messages and their state        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
+
+All four pieces run as containers on one Docker network, so they reach each other **by name** (`sb-emulator`, `mssql`), not by `localhost`. Only the ports you publish (`5085`, `5289`, `5672`, `5300`) are reachable from your machine. You can also run the two services outside Docker with `dotnet run` (§8, option B); they then reach the broker through the published port `localhost:5672`.
 
 | Piece                                        | What it is                                                            | Its job                                                                           |
 | -------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -77,8 +82,8 @@ The price you pay is **eventual consistency** and **at-least-once delivery**. Se
 | **Topic** (`orders`)                         | A named channel publishers send to                                    | Receives each `OrderPlacedEvent`                                                  |
 | **Subscriptions** (`notifications`, `audit`) | Named "inboxes" attached to a topic                                   | Each gets **its own copy** of every message sent to the topic                     |
 | **Contracts**                                | A .NET class library                                                  | Defines the shape of the message (`OrderPlacedEvent`) that both services agree on |
-| **OrderService**                             | ASP.NET Core minimal API                                              | The **publisher (producer)**                                                      |
-| **NotificationService**                      | ASP.NET Core app with a background worker                             | The **subscriber (consumer)**                                                     |
+| **OrderService**                             | ASP.NET Core minimal API, container `order-service`                   | The **publisher (producer)**                                                      |
+| **NotificationService**                      | ASP.NET Core app with a background worker, container `notification-service` | The **subscriber (consumer)**                                               |
 
 ### Topic vs queue
 
@@ -237,9 +242,12 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
 ├─ global.json                    ← pins the .NET SDK to 10.x
 ├─ nuget.config                   ← maps every package to nuget.org
 ├─ .gitignore                     ← standard .NET ignores, plus infra/.env
+├─ .dockerignore                  ← keeps bin/, obj/, .git and infra/.env out of image builds
+├─ docs\
+│  └─ ROADMAP.md                  ← next phase: 5 microservices, outbox/inbox, tracing, Kubernetes
 │
-├─ infra\                         ← everything needed to run the broker locally
-│  ├─ docker-compose.yaml         ← starts two containers: servicebus-emulator + mssql
+├─ infra\                         ← everything needed to run the system locally
+│  ├─ docker-compose.yaml         ← four containers: mssql, servicebus-emulator, order-service, notification-service
 │  ├─ Config.json                 ← namespace, topic "orders", subscriptions "notifications" + "audit"
 │  └─ .env                        ← SQL password + EULA flag (NOT committed)
 │
@@ -248,6 +256,7 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
    │  └─ OrderPlacedEvent.cs      ← the event shape both services agree on
    │
    ├─ OrderService\               ← PUBLISHER
+   │  ├─ Dockerfile               ← multi-stage build (SDK → ASP.NET runtime), runs as non-root on :8080
    │  ├─ Program.cs               ← client/sender singletons, POST /orders, debug peek endpoints
    │  ├─ DTOs\
    │  │  └─ PlaceOrderRequestDTO.cs  ← the API contract (what a client sends)
@@ -255,47 +264,88 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
    │  └─ OrderService.http        ← requests to send from VS Code (REST Client extension)
    │
    └─ NotificationService\        ← SUBSCRIBER
+      ├─ Dockerfile               ← same pattern as OrderService's
       ├─ Program.cs               ← client, processor, processed-message store, hosted consumer
       ├─ OrderPlacedConsumer.cs   ← BackgroundService: validate, dedupe, work, complete / dead-letter
       ├─ IProcessedMessageStore.cs ← idempotency store (in-memory, demo only)
       └─ appsettings.json         ← ServiceBus:TopicName + SubscriptionName
 ```
 
-The **connection string** isn't in any file in the repo. It's in **user secrets**, stored under your user profile and linked to each project by the `UserSecretsId` in its `.csproj`.
+Both services read the **connection string** from the config key `ServiceBus:ConnectionString`. Where the value comes from depends on how the service runs:
+
+- **In a container:** from the environment variable `SERVICEBUS__CONNECTIONSTRING` set in `docker-compose.yaml`. .NET turns `__` into `:` when it loads environment variables, so the code always asks for `ServiceBus:ConnectionString`, never for the `__` form.
+- **With `dotnet run`:** from **user secrets**, stored under your user profile and linked to each project by the `UserSecretsId` in its `.csproj`. Containers can't see user secrets.
+
+The emulator's key (`SAS_KEY_VALUE`) is public and documented, which is why it can sit in the compose file. A real Azure key would come from a secret store instead.
 
 ---
 
 ## 8. How to run it
 
+There are two ways to run it:
+
+- **A: everything in containers.** This is the normal way. You only need Docker.
+- **B: the broker in containers, the services with `dotnet run`.** Use this when you want to debug the C# code with breakpoints.
+
 ### Prerequisites
 
-- .NET 10 SDK
 - Docker Desktop (on Windows, with the WSL 2 engine), or Rancher Desktop with the **dockerd (moby)** container engine. With containerd, `docker` commands don't work; use `nerdctl compose` instead
+- .NET 10 SDK, only for option B. Option A builds inside the `sdk:10.0` image
 - VS Code with the **REST Client** extension, to use `OrderService.http` (optional)
 
-### 1. Start the broker
+> **Rancher Desktop:** if `docker` isn't recognized in a VS Code terminal, restart VS Code. Rancher adds its tools to `PATH`, and terminals opened before the install don't see the change.
 
-Create `infra/.env`:
+### 1. Create `infra/.env` (once)
 
 ```
 CONFIG_PATH="./Config.json"
 ACCEPT_EULA="Y"
 MSSQL_SA_PASSWORD="<strong password: 8+ chars, upper/lower/digit/symbol, no ; = quotes or $>"
 EMULATOR_HTTP_PORT=5300
+SQL_WAIT_INTERVAL=15
 ```
 
-`ACCEPT_EULA="Y"` accepts the license terms of the Service Bus emulator and SQL Server. The password ends up inside a SQL connection string, so it must not contain `;`.
+`ACCEPT_EULA="Y"` accepts the license terms of the Service Bus emulator and SQL Server. The password ends up inside a SQL connection string, so it must not contain `;`. `SQL_WAIT_INTERVAL` is optional; setting it silences a compose warning.
 
-Then, from `infra\`:
+### 2A. Start everything in containers
 
-```bash
-docker compose up -d
-curl http://localhost:5300/health          # 200 once it's ready (~30 s)
+From `infra\`:
+
+```powershell
+docker compose up -d --build
+docker compose ps                         # 4 containers running
+curl.exe http://localhost:5300/health     # 200 once the emulator is ready (~30 s)
 ```
 
-Docker reads `.env` and `Config.json` only when it creates the containers. After changing either, run `docker compose up -d --force-recreate`. That also empties the broker, because the containers keep no data.
+| Container              | From your machine                       | What it is                               |
+| ---------------------- | --------------------------------------- | ---------------------------------------- |
+| `order-service`        | http://localhost:5085 (→ 8080 inside)   | The publisher: `POST /orders`, `/debug/*` |
+| `notification-service` | http://localhost:5289 (→ 8080 inside)   | The consumer. It has no API yet          |
+| `servicebus-emulator`  | `localhost:5672` (AMQP), `5300` (health) | The broker                              |
+| `mssql`                | not published                           | The emulator's storage                   |
 
-### 2. Set the connection string (once per project)
+Watch a service's log with `docker compose logs -f notification-service`, or `order-service`.
+
+**What to rerun after a change:**
+
+| You changed                   | Run                                              | Why                                                                                         |
+| ----------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| C# code                       | `docker compose up -d --build <service>`         | The code is baked into the image. Without `--build` you keep running the old image          |
+| `.env` or `Config.json`       | `docker compose up -d --force-recreate`          | Docker reads them only when it creates a container. This also **empties the broker**        |
+| `docker-compose.yaml`         | `docker compose up -d`                           | Compose recreates only the containers whose settings changed                                |
+
+**PowerShell:** use `curl.exe`, not `curl`. In PowerShell, `curl` is an alias for `Invoke-WebRequest`.
+
+### 2B. Or run the services with `dotnet run`
+
+Start only the broker, or stop the service containers if they're running. Otherwise ports 5085 and 5289 clash, and a second NotificationService would quietly share the subscription with the first:
+
+```powershell
+docker compose up -d mssql emulator
+docker compose stop order-service notification-service   # if they were running
+```
+
+Set the connection string once per project. Outside Docker the broker is at `localhost`:
 
 ```bash
 dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;" --project src/OrderService
@@ -304,7 +354,7 @@ dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;S
 
 `SAS_KEY_VALUE` is the emulator's literal, documented key. Don't replace it.
 
-### 3. Start the services, each in its own terminal, from the repo root
+Then, each in its own terminal, from the repo root:
 
 ```bash
 dotnet run --project src/OrderService          # http://localhost:5085
@@ -313,19 +363,19 @@ dotnet run --project src/NotificationService   # http://localhost:5291 (subscrip
 
 Stop them with **Ctrl+C**, so the consumer shuts down gracefully.
 
-**Optional extra consumers.** Command-line arguments override `appsettings.json`:
+**Optional extra consumers.** These work in either setup, because they reach the broker through `localhost:5672`. Command-line arguments override `appsettings.json`:
 
 ```bash
 # fan-out: a consumer on the audit subscription
 dotnet run --project src/NotificationService -- --ServiceBus:SubscriptionName=audit --urls http://localhost:5292
 
-# competing consumers: a second instance on the notifications subscription
+# competing consumers: a second instance next to notification-service (container or dotnet run)
 dotnet run --project src/NotificationService -- --urls http://localhost:5293
 ```
 
-### 4. Send requests
+### 3. Send requests
 
-Open `src/OrderService/OrderService.http` and click **Send Request**, or use curl.
+Open `src/OrderService/OrderService.http` and click **Send Request**, or use curl. Both setups use http://localhost:5085.
 
 | Request                                      | What it does                                                                                                          |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -337,21 +387,38 @@ Open `src/OrderService/OrderService.http` and click **Send Request**, or use cur
 
 The `/debug/*` endpoints and the test hooks exist for learning only. A real service wouldn't ship them, or would enable them only in Development.
 
-### 5. Stop the broker
+**Consumer offline (temporal decoupling) with containers:**
 
-```bash
-docker compose down
+```powershell
+docker compose stop notification-service
+# POST an order → 202; GET /debug/peek shows it waiting
+docker compose start notification-service
+docker compose logs -f notification-service    # the order is processed on startup
+```
+
+### 4. Stop
+
+```powershell
+docker compose stop    # stops the containers; messages in the broker are kept
+docker compose down    # removes the containers; the broker starts empty next time
 ```
 
 ### Troubleshooting
 
-| Symptom                                                          | Cause                                                                                                     |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `SocketException (10061)` / "target machine actively refused it" | The emulator isn't running or is restarting. Check `docker ps` and `docker logs servicebus-emulator`.     |
-| Emulator keeps restarting; log says `Keyword not supported`      | The SQL password contains `;`.                                                                            |
-| `NU1100` / "PackageSourceMapping is enabled"                     | A global NuGet config is blocking packages. The repo's `nuget.config` fixes that; make sure it's present. |
-| Build error "file is locked by OrderService"                     | A service is still running. Stop it, then build.                                                          |
-| `/debug/peek` is empty right after a POST                        | The emulator takes a moment to make a new message readable. Try again after a second or two.              |
+| Symptom                                                                       | Cause                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SocketException (10061)` / "target machine actively refused it"              | The emulator isn't running or is restarting. Check `docker compose ps` and `docker compose logs emulator`. Right after startup, wait ~30 s.                                                              |
+| `ArgumentNullException … (Parameter 'connectionString')` on the first request | The connection string didn't reach the app. In compose, the variable must be `SERVICEBUS__CONNECTIONSTRING` (**double** underscore), and the code must read `ServiceBus:ConnectionString` (colon). Check with `docker compose exec order-service printenv SERVICEBUS__CONNECTIONSTRING`. |
+| A container can't reach the broker, but `dotnet run` can                      | The connection string inside the container says `localhost`, which there means the container itself. Use `sb://sb-emulator`.                                                                             |
+| Connection hangs or fails even with the right host                            | `UseDevelopmentEmulator=true` is missing. Without it, the SDK tries TLS on port 5671, which the emulator doesn't serve.                                                                                  |
+| A code change doesn't show up in the container                                | The image wasn't rebuilt. Use `docker compose up -d --build <service>`.                                                                                                                                 |
+| `Bind for 0.0.0.0:5085 failed: port is already allocated`                     | A `dotnet run` copy of the service is still running. Stop it, or stop the container (option B).                                                                                                         |
+| `services.<name>.<other> … schema` when running compose                       | A YAML indentation mistake: a service is nested inside another. Every service must start at the same column. Check with `docker compose config --services`.                                              |
+| `Failed to determine the https port for redirect` in a container log          | `UseHttpsRedirection()` is running in the container, which only serves HTTP on 8080. This project doesn't use it.                                                                                       |
+| Emulator keeps restarting; log says `Keyword not supported`                   | The SQL password contains `;`.                                                                                                                                                                          |
+| `NU1100` / "PackageSourceMapping is enabled"                                  | A global NuGet config is blocking packages. The repo's `nuget.config` fixes that; make sure it's present.                                                                                               |
+| Build error "file is locked by OrderService"                                  | A service is still running under `dotnet run`. Stop it, then build.                                                                                                                                     |
+| `/debug/peek` is empty right after a POST                                     | The emulator takes a moment to make a new message readable. Try again after a second or two.                                                                                                            |
 
 ---
 
@@ -368,6 +435,16 @@ docker compose down
   - [x] d) Fan-out to `audit` (subscription added; run both consumers) and competing consumers
 - [ ] **Milestone 6 (optional): real Azure.** Standard namespace (topics need Standard tier), swap the connection string, try `DefaultAzureCredential`.
 - [ ] **Milestone 7 (optional): transactional outbox.** Store orders in SQL and publish through an outbox relay.
+
+### Next phase: microservices ([docs/ROADMAP.md](docs/ROADMAP.md))
+
+- [x] **Step 1: containers.** Both services run as containers next to the broker (a Dockerfile per service and one compose file).
+- [ ] Step 2: a shared `Messaging` library and a topic per producing service
+- [ ] Step 3: a database per service, the outbox and the inbox (this replaces Milestone 7 above)
+- [ ] Step 4: Inventory, Payment and Shipping services: a choreographed saga with compensation
+- [ ] Step 5: OpenTelemetry and the Aspire Dashboard
+- [ ] Step 6: README rewrite
+- [ ] Step 7: Kubernetes (planned only)
 
 ---
 

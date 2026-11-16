@@ -31,6 +31,31 @@ services:
         environment:
           ACCEPT_EULA: ${ACCEPT_EULA}
           MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}" # To be filled by user as per policy : https://learn.microsoft.com/en-us/sql/relational-databases/security/strong-passwords?view=sql-server-linux-ver16 
-
+  order-service:
+    container_name: "order-service"
+    build:
+      context: ..
+      dockerfile: src/OrderService/Dockerfile
+    ports:
+      - "5085:8080"
+    environment:
+      SERVICEBUS__CONNECTIONSTRING: "Endpoint=sb://sb-emulator/;UseDevelopmentEmulator=true;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE"
+    depends_on:
+      - emulator
+    networks:
+      [sb-emulator]
+  notification-service:
+    container_name: "notification-service"
+    build:
+      context: ..
+      dockerfile: src/NotificationService/Dockerfile
+    ports:
+      - "5289:8080"
+    environment:
+      SERVICEBUS__CONNECTIONSTRING: "Endpoint=sb://sb-emulator/;UseDevelopmentEmulator=true;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE"
+    depends_on:
+      - emulator
+    networks:
+      [sb-emulator]
 networks:
   sb-emulator:

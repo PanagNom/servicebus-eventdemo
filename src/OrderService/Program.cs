@@ -19,9 +19,6 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
-
-
 app.MapPost("/orders", async (PlaceOrderRequestDTO request, ServiceBusSender sender, HttpContext context, CancellationToken cancellationToken) =>
 {
     OrderPlacedEvent orderPlacedEvent = new OrderPlacedEvent
