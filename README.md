@@ -270,7 +270,7 @@ The **connection string** isn't in any file in the repo. It's in **user secrets*
 ### Prerequisites
 
 - .NET 10 SDK
-- Docker Desktop (on Windows, with the WSL 2 engine)
+- Docker Desktop (on Windows, with the WSL 2 engine), or Rancher Desktop with the **dockerd (moby)** container engine. With containerd, `docker` commands don't work; use `nerdctl compose` instead
 - VS Code with the **REST Client** extension, to use `OrderService.http` (optional)
 
 ### 1. Start the broker
