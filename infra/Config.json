@@ -9,8 +9,8 @@
             "Name": "orders",
             "Properties": {
               "DefaultMessageTimeToLive": "PT1H",
-              "DuplicateDetectionHistoryTimeWindow": "PT20S",
-              "RequiresDuplicateDetection": false
+              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "RequiresDuplicateDetection": true
             },
             "Subscriptions": [
               {
@@ -26,7 +26,202 @@
                 }
               },
               {
-                "Name": "audit",
+                "Name": "inventory",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              },
+              {
+                "Name": "payment",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              },
+              {
+                "Name": "shipping",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              }
+            ]
+          },
+          {
+            "Name": "inventory",
+            "Properties": {
+              "DefaultMessageTimeToLive": "PT1H",
+              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "RequiresDuplicateDetection": true
+            },
+            "Subscriptions": [
+              {
+                "Name": "payment",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 10,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                },
+                "Rules": [
+                  {
+                    "Name": "only-stock-reserved",
+                    "Properties": {
+                      "FilterType": "Correlation",
+                      "CorrelationFilter": {
+                        "Label": "StockReserved"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "Name": "order",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              },
+              {
+                "Name": "notifications",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 10,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              }
+            ]
+          },
+          {
+            "Name": "payments",
+            "Properties": {
+              "DefaultMessageTimeToLive": "PT1H",
+              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "RequiresDuplicateDetection": true
+            },
+            "Subscriptions": [
+              {
+                "Name": "shipping",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 10,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                },
+                "Rules": [
+                  {
+                    "Name": "only-payment-succeeded",
+                    "Properties": {
+                      "FilterType": "Correlation",
+                      "CorrelationFilter": {
+                        "Label": "PaymentSucceeded"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "Name": "inventory",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                },
+                "Rules": [
+                  {
+                    "Name": "only-payment-failed",
+                    "Properties": {
+                      "FilterType": "Correlation",
+                      "CorrelationFilter": {
+                        "Label": "PaymentFailed"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "Name": "order",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 3,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              },
+              {
+                "Name": "notifications",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 10,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              }
+            ]
+          },
+          {
+            "Name": "shipping",
+            "Properties": {
+              "DefaultMessageTimeToLive": "PT1H",
+              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "RequiresDuplicateDetection": true
+            },
+            "Subscriptions": [
+              {
+                "Name": "notifications",
+                "Properties": {
+                  "DeadLetteringOnMessageExpiration": true,
+                  "DefaultMessageTimeToLive": "PT1H",
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 10,
+                  "ForwardDeadLetteredMessagesTo": "",
+                  "ForwardTo": "",
+                  "RequiresSession": false
+                }
+              },
+              {
+                "Name": "order",
                 "Properties": {
                   "DeadLetteringOnMessageExpiration": true,
                   "DefaultMessageTimeToLive": "PT1H",

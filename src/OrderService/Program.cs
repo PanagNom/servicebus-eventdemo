@@ -1,17 +1,21 @@
 using Azure.Messaging.ServiceBus;
 using Contracts;
+using Messaging;
 using OrderService.DTOs;
+using ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddServiceDefaults();
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-builder.Services.AddSingleton(_ => new ServiceBusClient(builder.Configuration["ServiceBus:ConnectionString"]));
-builder.Services.AddSingleton(sp => sp.GetRequiredService<ServiceBusClient>().CreateSender(builder.Configuration["ServiceBus:TopicName"]));
+builder.Services.AddServiceBus(builder.Configuration["ServiceBus:ConnectionString"] ?? throw new InvalidOperationException("ServiceBus:ConnectionString is not configured")).AddEventPublisher(Topics.Orders);
 
 var app = builder.Build();
+
+app.MapDefaultEndpoints();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -19,26 +23,23 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.MapPost("/orders", async (PlaceOrderRequestDTO request, ServiceBusSender sender, HttpContext context, CancellationToken cancellationToken) =>
+app.MapPost("/orders", async (PlaceOrderRequestDTO request, IEventPublisher eventPublisher, CancellationToken cancellationToken) =>
 {
     OrderPlacedEvent orderPlacedEvent = new OrderPlacedEvent
     {
         OrderId = Guid.CreateVersion7().ToString(),
         CustomerId = request.CustomerId,
         Email = request.CustomerEmail,
+        ProductId = request.ProductId,
+        Quantity = request.Quantity,
+        ShippingAddress = request.ShippingAddress,
+        PaymentMethod = request.PaymentMethod,
         TotalAmount = request.TotalAmount,
         Currency = request.Currency,
         PlacedAt = DateTimeOffset.UtcNow
     };
 
-    ServiceBusMessage message = new ServiceBusMessage(System.Text.Json.JsonSerializer.Serialize(orderPlacedEvent));
-    message.MessageId = orderPlacedEvent.OrderId;
-    message.Subject = "OrderPlaced";
-    message.ContentType = "application/json";
-    message.CorrelationId = context.TraceIdentifier;
-    message.ApplicationProperties.Add("SchemaVersion", 1);
-
-    await sender.SendMessageAsync(message, cancellationToken);
+    await eventPublisher.PublishAsync(orderPlacedEvent, EventSubjects.OrderPlaced, messageId: orderPlacedEvent.OrderId, correlationId: orderPlacedEvent.OrderId, cancellationToken);
 
     return Results.Accepted($"/orders/{orderPlacedEvent.OrderId}", new { OrderId = orderPlacedEvent.OrderId });
 });

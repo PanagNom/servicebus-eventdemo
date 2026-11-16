@@ -1,7 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Contracts/Contracts.csproj" />
+    <Project Path="src/Messaging/Messaging.csproj" />
     <Project Path="src/NotificationService/NotificationService.csproj" />
     <Project Path="src/OrderService/OrderService.csproj" />
+    <Project Path="src/ServiceDefaults/ServiceDefaults.csproj" />
   </Folder>
 </Solution>

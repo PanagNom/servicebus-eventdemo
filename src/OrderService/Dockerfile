@@ -5,6 +5,8 @@ COPY global.json ./
 COPY nuget.config ./
 COPY src/OrderService/OrderService.csproj ./src/OrderService/
 COPY src/Contracts/Contracts.csproj ./src/Contracts/
+COPY src/Messaging/Messaging.csproj ./src/Messaging/
+COPY src/ServiceDefaults/ServiceDefaults.csproj ./src/ServiceDefaults/
 
 RUN dotnet restore src/OrderService/OrderService.csproj
 

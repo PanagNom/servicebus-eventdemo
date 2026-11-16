@@ -5,6 +5,8 @@ COPY global.json ./
 COPY nuget.config ./
 COPY src/NotificationService/NotificationService.csproj ./src/NotificationService/
 COPY src/Contracts/Contracts.csproj ./src/Contracts/
+COPY src/Messaging/Messaging.csproj ./src/Messaging/
+COPY src/ServiceDefaults/ServiceDefaults.csproj ./src/ServiceDefaults/
 
 RUN dotnet restore src/NotificationService/NotificationService.csproj
 
