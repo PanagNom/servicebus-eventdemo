@@ -1,8 +1,8 @@
 # Milestone 2: shared `Messaging` library, `ServiceDefaults` and the new topology
 
-**Where we are:** Milestone 1 is done (commit `5c2ea22`, "Containerise the two services"). Milestone 2 is in progress: Steps 1–4 are done and committed. The overall plan is in [ROADMAP.md](ROADMAP.md). The [Progress](#progress) section at the end has the details and what to do first.
+**Where we are:** Milestone 1 is done (commit `5c2ea22`, "Containerise the two services"). Milestone 2 is in progress: Steps 1–5 are done. Only Step 6, the consumer side, is left. The overall plan is in [ROADMAP.md](ROADMAP.md). The [Progress](#progress) section at the end has the details.
 
-**Next session:** recreate the emulator (see "Before Step 5" under Progress), then do Step 5.
+**Next session:** run the two Step 5 checks that are still open (under Progress), then start Step 6.
 
 ---
 
@@ -188,30 +188,28 @@ This happens again with `Messaging`.
 - [x] **Step 2: Config.json topology.** 4 topics, 13 subscriptions, correlation rules on `Label`, duplicate detection (`PT5M`, the emulator's maximum; `PT10M` made it crash at startup).
 - [x] **Step 3: ServiceDefaults and `/health`.** `AddServiceDefaults()` and `MapDefaultEndpoints()` in both services. Checked: `/health` → `Healthy` on 5085 and 5289.
 - [x] **Step 4: Messaging, publishing.** `MessageEnvelope`, `IEventPublisher`, `ServiceBusEventPublisher`, and `AddServiceBus()` / `AddEventPublisher(topic)` (a factory, so the sender stays private). OrderService publishes through it with `OrderId` as both MessageId and CorrelationId. Checked: POST → 202 → `EMAIL SENT`, and the consumer log shows CorrelationId = OrderId.
-- [ ] Step 5: Messaging, debug endpoints
+- [x] **Step 5: Messaging, debug endpoints.** `MapMessagingDebugEndpoints()` in [DebugEndpoints.cs](../src/Messaging/DebugEndpoints.cs): `GET /debug/peek/{topic}/{subscription}` and `GET /debug/peek-dlq/{topic}/{subscription}`. Bodies are raw strings, so the library stays free of Contracts. The DLQ view shows `DeadLetterReason`, `DeadLetterErrorDescription`, `DeliveryCount` and `EnqueuedTime`. Mapped in Development only, and compose sets `ASPNETCORE_ENVIRONMENT: Development`. OrderService no longer references `Azure.Messaging.ServiceBus` directly. [OrderService.http](../src/OrderService/OrderService.http) has one-click peeks for all four `orders/*` subscriptions, the DLQ and both `/health` endpoints. Checked: every GET in the `.http` file returns 200, and `orders/inventory`, `orders/payment` and `orders/shipping` exist, which confirms the emulator loaded the new topology.
 - [ ] Step 6: Messaging, consuming
 - [ ] All checkpoint scenarios pass, README updated, committed
 
-### Before Step 5 (do this first)
+### Still open from Step 5 (quick, do these first)
 
-1. **Recreate the emulator** so it loads the new Config.json. It has been running since before Step 2, so it still has the old `orders` → `notifications` + `audit` topology. Step 5's checkpoint (peeking `orders/inventory`, `orders/payment`, `orders/shipping`) needs the new subscriptions. Recreating empties the broker.
-   ```powershell
-   cd infra
-   docker compose up -d --force-recreate emulator
-   docker compose logs -f emulator      # wait until it's ready; look for errors about entities or rules
-   ```
-2. **Add `SQL_WAIT_INTERVAL=15` to `infra/.env`.** It's listed in README §8 and silences the compose warning.
-3. POST one order to confirm that M1 behavior still works on the new topology: 202, then `EMAIL SENT`.
+These two checks haven't been run yet. They need clicks in [OrderService.http](../src/OrderService/OrderService.http):
 
-### Open nits (small, fix when convenient)
+1. **Fan-out:** `docker compose stop notification-service`, then **Place an order**, then the four **Peek orders/…** requests. Expect the **same MessageId** in all four. Then `docker compose start notification-service` and expect `EMAIL SENT` for the waiting copy.
+2. **DLQ:** **Place an order poison**, wait a few seconds, then **Peek the DLQ of orders/notifications**. Expect `DeadLetterReason: MaxDeliveryCountExceeded` and `DeliveryCount: 3`.
 
-- [ServiceBusEventPublisher.cs](../src/Messaging/ServiceBusEventPublisher.cs): the closing `}` of `PublishAsync` sits on the `await` line. Also add a blank line after the field.
-- [OrderService Program.cs](../src/OrderService/Program.cs): split the long `AddServiceBus(...)` line over 2–3 lines.
-- [MessageEnvelope.cs](../src/Messaging/MessageEnvelope.cs), optional: `ArgumentNullException.ThrowIfNull(payload);`.
+### Open nits
 
-### Step 5 in short (details above)
+- [DebugEndpoints.cs](../src/Messaging/DebugEndpoints.cs) line 12: trailing spaces.
 
-- Add `MapMessagingDebugEndpoints()` to Messaging: `GET /debug/peek/{topic}/{subscription}` and `GET /debug/dlq/{topic}/{subscription}`, returning `Body` as a string.
-- Map them only in Development, and set `ASPNETCORE_ENVIRONMENT: Development` on both services in `docker-compose.yaml`.
-- Delete the old `/debug/peek` and `/debug/peek-dlq` from OrderService, then remove its own `Azure.Messaging.ServiceBus` package reference and `using`: they come through Messaging now.
-- Update [OrderService.http](../src/OrderService/OrderService.http) to the new URLs.
+(The earlier nits are fixed: the publisher's `}` formatting, the split `AddServiceBus(...)` line, and the `payload` guard in `MessageEnvelope`.)
+
+### Step 6 in short (details above)
+
+- Move `IProcessedMessageStore` (and its in-memory implementation) into Messaging.
+- Add `IEventHandler<TEvent>` and `MessageContext` (MessageId, CorrelationId, DeliveryCount, plus a test-only `SimulateLostComplete()` for the `flaky` hook).
+- Add `SubscriptionProcessor`, a `BackgroundService` per topic and subscription, holding the flow from [OrderPlacedConsumer.cs](../src/NotificationService/OrderPlacedConsumer.cs): subject and schema check → deserialize → duplicate check → handler in a DI scope → mark processed → complete, with permanent failures dead-lettered.
+- Add a registration API like `AddSubscription(Topics.Orders, "notifications").Handle<OrderPlacedEvent, OrderPlacedHandler>(EventSubjects.OrderPlaced)`. Register each processor with `AddSingleton<IHostedService>(sp => ...)`, **not** `AddHostedService<T>()`, which keeps only one instance.
+- NotificationService: replace `OrderPlacedConsumer` with an `OrderPlacedHandler` that holds only the poison and flaky hooks and the `EMAIL SENT` log. Add the Messaging project reference to its csproj. Its Dockerfile already has the Messaging `COPY` line.
+- Checkpoint: normal → `EMAIL SENT`; poison → DLQ after 3; flaky → `Duplicate … skipping`; consumer offline → processed on restart; `/health` on both.
