@@ -40,6 +40,7 @@ services:
       - "5085:8080"
     environment:
       SERVICEBUS__CONNECTIONSTRING: "Endpoint=sb://sb-emulator/;UseDevelopmentEmulator=true;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE"
+      ASPNETCORE_ENVIRONMENT: "Development"
     depends_on:
       - emulator
     networks:
@@ -53,6 +54,7 @@ services:
       - "5289:8080"
     environment:
       SERVICEBUS__CONNECTIONSTRING: "Endpoint=sb://sb-emulator/;UseDevelopmentEmulator=true;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE"
+      ASPNETCORE_ENVIRONMENT: "Development"
     depends_on:
       - emulator
     networks:

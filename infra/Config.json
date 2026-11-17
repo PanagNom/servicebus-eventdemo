@@ -9,7 +9,7 @@
             "Name": "orders",
             "Properties": {
               "DefaultMessageTimeToLive": "PT1H",
-              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "RequiresDuplicateDetection": true
             },
             "Subscriptions": [
@@ -67,7 +67,7 @@
             "Name": "inventory",
             "Properties": {
               "DefaultMessageTimeToLive": "PT1H",
-              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "RequiresDuplicateDetection": true
             },
             "Subscriptions": [
@@ -124,7 +124,7 @@
             "Name": "payments",
             "Properties": {
               "DefaultMessageTimeToLive": "PT1H",
-              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "RequiresDuplicateDetection": true
             },
             "Subscriptions": [
@@ -204,7 +204,7 @@
             "Name": "shipping",
             "Properties": {
               "DefaultMessageTimeToLive": "PT1H",
-              "DuplicateDetectionHistoryTimeWindow": "PT10M",
+              "DuplicateDetectionHistoryTimeWindow": "PT5M",
               "RequiresDuplicateDetection": true
             },
             "Subscriptions": [

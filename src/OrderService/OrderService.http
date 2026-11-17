@@ -1,4 +1,5 @@
 @OrderService_HostAddress = http://localhost:5085
+@NotificationService_HostAddress = http://localhost:5289
 
 ### Place an order
 POST {{OrderService_HostAddress}}/orders
@@ -15,6 +16,7 @@ Content-Type: application/json
   "totalAmount": 59.90,
   "currency": "EUR"
 }
+
 ### Place an order poison
 POST {{OrderService_HostAddress}}/orders
 Content-Type: application/json
@@ -46,10 +48,43 @@ Content-Type: application/json
   "totalAmount": 59.90,
   "currency": "EUR"
 }
-### Peek at messages waiting in the "notifications" subscription (doesn't remove them)
-GET {{OrderService_HostAddress}}/debug/peek
+
+# ---------------------------------------------------------------------------
+# Fan-out: one OrderPlaced lands in all four subscriptions of the "orders" topic.
+# Run "docker compose stop notification-service" first, so its copy stays too.
+# Peeking doesn't remove or lock anything.
+# ---------------------------------------------------------------------------
+
+### Peek orders/notifications (NotificationService)
+GET {{OrderService_HostAddress}}/debug/peek/orders/notifications
 Accept: application/json
 
-### Peek at messages waiting in the dead-letter queue (DLQ) for the "notifications" subscription (doesn't remove them)
-GET {{OrderService_HostAddress}}/debug/peek-dlq
+### Peek orders/inventory (waits for InventoryService, M4)
+GET {{OrderService_HostAddress}}/debug/peek/orders/inventory
 Accept: application/json
+
+### Peek orders/payment (waits for PaymentService, M4)
+GET {{OrderService_HostAddress}}/debug/peek/orders/payment
+Accept: application/json
+
+### Peek orders/shipping (waits for ShippingService, M4)
+GET {{OrderService_HostAddress}}/debug/peek/orders/shipping
+Accept: application/json
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue: where "poison" ends up after 3 deliveries
+# ---------------------------------------------------------------------------
+
+### Peek the DLQ of orders/notifications
+GET {{OrderService_HostAddress}}/debug/peek-dlq/orders/notifications
+Accept: application/json
+
+# ---------------------------------------------------------------------------
+# Health (liveness only for now)
+# ---------------------------------------------------------------------------
+
+### OrderService health
+GET {{OrderService_HostAddress}}/health
+
+### NotificationService health
+GET {{NotificationService_HostAddress}}/health

@@ -83,7 +83,9 @@ The **10s** are the subscriptions where the event can arrive *before* that servi
 }
 ```
 
-On each topic, set `RequiresDuplicateDetection: true` with `DuplicateDetectionHistoryTimeWindow: "PT10M"`. This is free protection against double sends from the outbox in M3.
+On each topic, set `RequiresDuplicateDetection: true` with `DuplicateDetectionHistoryTimeWindow: "PT5M"`. This is free protection against double sends from the outbox in M3.
+
+> **Emulator limit:** the emulator refuses to start with a window above **5 minutes** (*"Max Duplicate detection window supported 5m"*). Real Azure Service Bus allows up to 7 days.
 
 **Checkpoint:**
 - `docker compose up -d --force-recreate emulator`. Recreating empties the broker, because Docker only reads Config.json when it creates the container.
@@ -183,7 +185,7 @@ This happens again with `Messaging`.
 ## Progress
 
 - [x] **Step 1: Contracts.** 6 event records, `Topics`, and `EventSubjects` trimmed to the 6 subjects that exist. `PaymentProcessed` was renamed to `PaymentSucceeded` so it matches the `payments/shipping` filter.
-- [x] **Step 2: Config.json topology.** 4 topics, 13 subscriptions, correlation rules on `Label`, duplicate detection (`PT10M`). Reviewed, but **its checkpoint hasn't run yet**: the running emulator still has the old topology (see below).
+- [x] **Step 2: Config.json topology.** 4 topics, 13 subscriptions, correlation rules on `Label`, duplicate detection (`PT5M`, the emulator's maximum; `PT10M` made it crash at startup).
 - [x] **Step 3: ServiceDefaults and `/health`.** `AddServiceDefaults()` and `MapDefaultEndpoints()` in both services. Checked: `/health` → `Healthy` on 5085 and 5289.
 - [x] **Step 4: Messaging, publishing.** `MessageEnvelope`, `IEventPublisher`, `ServiceBusEventPublisher`, and `AddServiceBus()` / `AddEventPublisher(topic)` (a factory, so the sender stays private). OrderService publishes through it with `OrderId` as both MessageId and CorrelationId. Checked: POST → 202 → `EMAIL SENT`, and the consumer log shows CorrelationId = OrderId.
 - [ ] Step 5: Messaging, debug endpoints
