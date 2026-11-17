@@ -1,18 +1,16 @@
-using Azure.Messaging.ServiceBus;
+using Contracts;
+using Messaging;
 using NotificationService;
 using ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
-builder.Services.AddSingleton(_ => new ServiceBusClient(builder.Configuration["ServiceBus:ConnectionString"]));
-builder.Services.AddSingleton(sp => sp.GetRequiredService<ServiceBusClient>().CreateProcessor(builder.Configuration["ServiceBus:TopicName"], builder.Configuration["ServiceBus:SubscriptionName"], new ServiceBusProcessorOptions
-{
-    AutoCompleteMessages = false,
-    MaxConcurrentCalls = 1
-}));
-builder.Services.AddSingleton<IProcessedMessageStore, InMemoryProcessedMessageStore>();
-builder.Services.AddHostedService<OrderPlacedConsumer>();
+builder.Services
+    .AddServiceBus(builder.Configuration["ServiceBus:ConnectionString"]
+        ?? throw new InvalidOperationException("ServiceBus:ConnectionString is not configured"))
+    .AddSubscription(Topics.Orders, "notifications")
+    .Handle<OrderPlacedEvent, OrderPlacedHandler>(EventSubjects.OrderPlaced);
 
 var app = builder.Build();
 

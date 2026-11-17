@@ -1,4 +1,4 @@
-namespace NotificationService;
+namespace Messaging;
 
 using System.Collections.Concurrent;
 

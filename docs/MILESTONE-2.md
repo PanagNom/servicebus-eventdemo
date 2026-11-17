@@ -1,8 +1,8 @@
 # Milestone 2: shared `Messaging` library, `ServiceDefaults` and the new topology
 
-**Where we are:** Milestone 1 is done (commit `5c2ea22`, "Containerise the two services"). Milestone 2 is in progress: Steps 1–5 are done. Only Step 6, the consumer side, is left. The overall plan is in [ROADMAP.md](ROADMAP.md). The [Progress](#progress) section at the end has the details.
+**Where we are:** Milestone 1 is done (commit `5c2ea22`, "Containerise the two services"). Milestone 2's six steps are all done, and every checkpoint scenario passes. Only the commit is left. The overall plan is in [ROADMAP.md](ROADMAP.md). The [Progress](#progress) section at the end has the details and the results.
 
-**Next session:** run the two Step 5 checks that are still open (under Progress), then start Step 6.
+**Next session:** start roadmap step 3 (a database per service, the outbox and the inbox). First, confirm the one fan-out check listed under "Not yet confirmed".
 
 ---
 
@@ -189,27 +189,27 @@ This happens again with `Messaging`.
 - [x] **Step 3: ServiceDefaults and `/health`.** `AddServiceDefaults()` and `MapDefaultEndpoints()` in both services. Checked: `/health` → `Healthy` on 5085 and 5289.
 - [x] **Step 4: Messaging, publishing.** `MessageEnvelope`, `IEventPublisher`, `ServiceBusEventPublisher`, and `AddServiceBus()` / `AddEventPublisher(topic)` (a factory, so the sender stays private). OrderService publishes through it with `OrderId` as both MessageId and CorrelationId. Checked: POST → 202 → `EMAIL SENT`, and the consumer log shows CorrelationId = OrderId.
 - [x] **Step 5: Messaging, debug endpoints.** `MapMessagingDebugEndpoints()` in [DebugEndpoints.cs](../src/Messaging/DebugEndpoints.cs): `GET /debug/peek/{topic}/{subscription}` and `GET /debug/peek-dlq/{topic}/{subscription}`. Bodies are raw strings, so the library stays free of Contracts. The DLQ view shows `DeadLetterReason`, `DeadLetterErrorDescription`, `DeliveryCount` and `EnqueuedTime`. Mapped in Development only, and compose sets `ASPNETCORE_ENVIRONMENT: Development`. OrderService no longer references `Azure.Messaging.ServiceBus` directly. [OrderService.http](../src/OrderService/OrderService.http) has one-click peeks for all four `orders/*` subscriptions, the DLQ and both `/health` endpoints. Checked: every GET in the `.http` file returns 200, and `orders/inventory`, `orders/payment` and `orders/shipping` exist, which confirms the emulator loaded the new topology.
-- [ ] Step 6: Messaging, consuming
-- [ ] All checkpoint scenarios pass, README updated, committed
+- [x] **Step 6: Messaging, consuming.** `IProcessedMessageStore` moved into Messaging. New: `IEventHandler<TEvent>`; `MessageContext` with a test-only `SimulateLostComplete()`; `SubscriptionRegistration` and `SubscriptionBuilder` with `Handle<TEvent, THandler>(subject)`; and `SubscriptionProcessor`. The processor runs: subject lookup → SchemaVersion → deserialize → duplicate check keyed `subscription:MessageId` → handler in its own DI scope → mark processed → complete, with permanent failures dead-lettered. `AddSubscription` registers each processor with `AddSingleton<IHostedService>(factory)`. In NotificationService, `OrderPlacedHandler` replaces `OrderPlacedConsumer`, and its direct Service Bus reference and topic/subscription settings are gone.
+- [x] **All checkpoint scenarios pass, README updated.** Run against the rebuilt containers:
 
-### Still open from Step 5 (quick, do these first)
+  | Scenario | Result |
+  |---|---|
+  | `/health` on 5085 and 5289 | `Healthy (HTTP 200)` on both |
+  | Normal order | 202 → `Received OrderPlaced … on orders/notifications` → `EMAIL SENT` |
+  | poison | Deliveries 1, 2, 3 throw; DLQ shows `MaxDeliveryCountExceeded`, `DeliveryCount 3` (this also covers the Step 5 DLQ check) |
+  | flaky | Delivery 1: `EMAIL SENT`, then TEST HOOK. Delivery 2 (~30 s later): `Duplicate … skipping` |
+  | Consumer offline | Posted while stopped; after `start`: `Received`, then `EMAIL SENT` |
 
-These two checks haven't been run yet. They need clicks in [OrderService.http](../src/OrderService/OrderService.http):
+  The README now covers Messaging and ServiceDefaults, the four topics and filters, CorrelationId = OrderId, the new debug URLs, the end of the `audit` subscription, and new troubleshooting rows.
+- [ ] Committed
 
-1. **Fan-out:** `docker compose stop notification-service`, then **Place an order**, then the four **Peek orders/…** requests. Expect the **same MessageId** in all four. Then `docker compose start notification-service` and expect `EMAIL SENT` for the waiting copy.
-2. **DLQ:** **Place an order poison**, wait a few seconds, then **Peek the DLQ of orders/notifications**. Expect `DeadLetterReason: MaxDeliveryCountExceeded` and `DeliveryCount: 3`.
+**Milestone 2 is complete once it's committed.** Next is roadmap step 3 (a database per service, the outbox and the inbox); see [ROADMAP.md](ROADMAP.md).
+
+### Not yet confirmed
+
+- **Fan-out with the same MessageId in all four `orders/*` peeks.** In the consumer-offline run, a peek of `orders/notifications` 2 seconds after the POST came back empty, even though the message was processed after the restart. That matches the emulator delay in the README troubleshooting table ("`/debug/peek/...` is empty right after a POST"). To confirm: stop notification-service, POST, wait about 5 seconds, then run the four **Peek orders/…** requests in [OrderService.http](../src/OrderService/OrderService.http).
 
 ### Open nits
 
-- [DebugEndpoints.cs](../src/Messaging/DebugEndpoints.cs) line 12: trailing spaces.
-
-(The earlier nits are fixed: the publisher's `}` formatting, the split `AddServiceBus(...)` line, and the `payload` guard in `MessageEnvelope`.)
-
-### Step 6 in short (details above)
-
-- Move `IProcessedMessageStore` (and its in-memory implementation) into Messaging.
-- Add `IEventHandler<TEvent>` and `MessageContext` (MessageId, CorrelationId, DeliveryCount, plus a test-only `SimulateLostComplete()` for the `flaky` hook).
-- Add `SubscriptionProcessor`, a `BackgroundService` per topic and subscription, holding the flow from [OrderPlacedConsumer.cs](../src/NotificationService/OrderPlacedConsumer.cs): subject and schema check → deserialize → duplicate check → handler in a DI scope → mark processed → complete, with permanent failures dead-lettered.
-- Add a registration API like `AddSubscription(Topics.Orders, "notifications").Handle<OrderPlacedEvent, OrderPlacedHandler>(EventSubjects.OrderPlaced)`. Register each processor with `AddSingleton<IHostedService>(sp => ...)`, **not** `AddHostedService<T>()`, which keeps only one instance.
-- NotificationService: replace `OrderPlacedConsumer` with an `OrderPlacedHandler` that holds only the poison and flaky hooks and the `EMAIL SENT` log. Add the Messaging project reference to its csproj. Its Dockerfile already has the Messaging `COPY` line.
-- Checkpoint: normal → `EMAIL SENT`; poison → DLQ after 3; flaky → `Duplicate … skipping`; consumer offline → processed on restart; `/health` on both.
+- [DebugEndpoints.cs](../src/Messaging/DebugEndpoints.cs) line 12: trailing spaces (still there).
+- [OrderService appsettings.json](../src/OrderService/appsettings.json): `ServiceBus:TopicName` is no longer read (the topic comes from `Topics.Orders`). It can go.

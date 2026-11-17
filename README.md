@@ -65,7 +65,8 @@ The price you pay is **eventual consistency** and **at-least-once delivery**. Se
 │  │  │ servicebus-emulator                                            │ │   │
 │  │  │   namespace: sbemulatorns                                      │ │   │
 │  │  │     topic: orders ──┬── subscription: notifications            │ │   │
-│  │  │                     └── subscription: audit ──▶ 2nd consumer   │ │   │
+│  │  │                     └── inventory · payment · shipping (M4)    │ │   │
+│  │  │   + topics inventory, payments, shipping (used from M4)        │ │   │
 │  │  └────────────────────────────────────────────────────────────────┘ │   │
 │  │  mssql  ← where the emulator stores messages and their state        │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -79,9 +80,11 @@ All four pieces run as containers on one Docker network, so they reach each othe
 | **Service Bus emulator**                     | A Docker container from Microsoft that behaves like Azure Service Bus | The broker: accepts, stores and delivers messages                                 |
 | **mssql**                                    | SQL Server in Docker                                                  | The emulator's storage. It's why messages survive a restart                       |
 | **Namespace** (`sbemulatorns`)               | The top-level container, like a "server"                              | Holds topics and queues. In Azure, this is the resource you pay for               |
-| **Topic** (`orders`)                         | A named channel publishers send to                                    | Receives each `OrderPlacedEvent`                                                  |
-| **Subscriptions** (`notifications`, `audit`) | Named "inboxes" attached to a topic                                   | Each gets **its own copy** of every message sent to the topic                     |
-| **Contracts**                                | A .NET class library                                                  | Defines the shape of the message (`OrderPlacedEvent`) that both services agree on |
+| **Topics** (`orders`, `inventory`, `payments`, `shipping`) | Named channels publishers send to, **one per producing service** | `orders` receives each `OrderPlacedEvent`. The other three are ready for the services added in roadmap step 4 |
+| **Subscriptions** (on `orders`: `notifications`, `inventory`, `payment`, `shipping`) | Named "inboxes" attached to a topic, one per consuming service | Each gets **its own copy** of every message sent to the topic, unless a filter narrows it |
+| **Contracts**                                | A .NET class library                                                  | The 6 event shapes the services agree on, plus the `Topics` and `EventSubjects` names |
+| **Messaging**                                | A .NET class library around `Azure.Messaging.ServiceBus`              | All broker plumbing: publishing with a standard envelope, and consuming (validate, dispatch by Subject, dedupe, complete or dead-letter). Services only write handlers |
+| **ServiceDefaults**                          | A .NET class library                                                  | Setup every service shares. For now `/health`; OpenTelemetry later               |
 | **OrderService**                             | ASP.NET Core minimal API, container `order-service`                   | The **publisher (producer)**                                                      |
 | **NotificationService**                      | ASP.NET Core app with a background worker, container `notification-service` | The **subscriber (consumer)**                                               |
 
@@ -94,7 +97,9 @@ We use a topic because `OrderPlaced` is an event. Each subscription is an indepe
 
 Inside a single subscription, each message is still handled once. If you run several instances of NotificationService on the same subscription, they _share_ it and split the work between them (the **competing consumers** pattern).
 
-A subscription only receives messages sent **after** it exists. By default it receives everything (the `$Default` rule, `TrueRuleFilter`), but it can be given **filters** on message properties, for example "only `Currency = 'EUR'`".
+A subscription only receives messages sent **after** it exists. By default it receives everything (the `$Default` rule, `TrueRuleFilter`), but it can be given **filters** on message properties. `Config.json` uses **correlation filters on `Label`** (the AMQP name for Subject): for example, `payments/shipping` only receives `PaymentSucceeded`, and `payments/inventory` only `PaymentFailed`. A correlation filter is an exact match the broker can index; a SQL filter (`Currency = 'EUR'`) is evaluated per message.
+
+**Why one topic per producer:** each topic has one owner, the service that publishes to it. Consumers pick what they need with their own subscription. The emulator caps duplicate detection at 5 minutes (`PT5M`); real Azure allows up to 7 days.
 
 ---
 
@@ -105,34 +110,43 @@ A subscription only receives messages sent **after** it exists. By default it re
 1. A client sends `POST /orders` with a JSON body: product, customer, email, addresses, amount and currency. This is the `PlaceOrderRequestDTO` (the **API contract**).
 2. OrderService generates the parts the client shouldn't control: the `OrderId` (`Guid.CreateVersion7()`, which is time-ordered) and `PlacedAt`.
 3. It builds an `OrderPlacedEvent` (the **event contract**, from the Contracts library). The event carries only what consumers need, not the whole request.
-4. It wraps the event in a `ServiceBusMessage`:
+4. It calls `IEventPublisher.PublishAsync(event, EventSubjects.OrderPlaced, messageId: OrderId, correlationId: OrderId)` from the **Messaging** library. Messaging's `MessageEnvelope` wraps the event in a `ServiceBusMessage`, the same way for every service:
    - **Body:** the event serialized to JSON.
    - **Envelope properties:** metadata _about_ the message, which the broker and consumers can read without opening the body.
      - `MessageId = OrderId`: stable across retries, so duplicates can be recognized.
-     - `Subject`: `"OrderPlaced"`, the type of the event.
+     - `Subject`: `"OrderPlaced"`, the type of the event. Subscription filters and the consumer's handler lookup both match on it.
      - `ContentType`: `"application/json"`.
-     - `CorrelationId`: the HTTP request's `TraceIdentifier`, which ties the message to the request that caused it.
+     - `CorrelationId = OrderId`: every event about this order, in every service, carries the same value, so you can follow one order through the system.
      - `ApplicationProperties["SchemaVersion"] = 1`: which version of the event shape this is.
-   - The SDK also adds a `Diagnostic-Id` property by itself: a W3C trace context that tools like OpenTelemetry use to link the HTTP request and the message handling into one trace.
-5. It calls `SendMessageAsync`. When that returns, **the broker has stored the message durably**. That's the guarantee OrderService relies on.
+   - The SDK also adds a `Diagnostic-Id` property by itself: a W3C trace context that tools like OpenTelemetry use to link the HTTP request and the message handling into one trace. That's tracing; `CorrelationId` is the business key.
+   - The envelope refuses an empty `MessageId`, `CorrelationId` or `Subject`, so a missing id fails at the sender instead of quietly defeating duplicate detection.
+5. The publisher calls `SendMessageAsync`. When that returns, **the broker has stored the message durably**. That's the guarantee OrderService relies on.
 6. OrderService returns **202 Accepted** with the `orderId`: "I've accepted your order and the rest will happen". It doesn't return 201 Created, because the downstream work hasn't happened yet.
 
 ### In the broker
 
-7. The topic `orders` gets the message and puts a copy in **each** subscription: `notifications` and `audit`.
+7. The topic `orders` gets the message and puts a copy in **each** subscription: `notifications`, `inventory`, `payment` and `shipping`. Only `notifications` has a consumer so far; the other three copies wait for the services added in roadmap step 4.
 8. Each copy sits in its subscription in the **Active** state, waiting. It stays there whether or not a consumer is running, until it's consumed or expires (time to live is 1 hour in `Config.json`).
 
 ### Consuming (NotificationService)
 
-9. NotificationService runs a `ServiceBusProcessor` inside a `BackgroundService` (`OrderPlacedConsumer`). It keeps an open connection and asks for messages from its subscription (`notifications` by default).
+9. NotificationService registers one subscription and one handler:
+   ```csharp
+   builder.Services.AddServiceBus(connectionString)
+       .AddSubscription(Topics.Orders, "notifications")
+       .Handle<OrderPlacedEvent, OrderPlacedHandler>(EventSubjects.OrderPlaced);
+   ```
+   For each `AddSubscription`, Messaging runs a `SubscriptionProcessor`: a `BackgroundService` around a `ServiceBusProcessor`. It keeps an open connection and asks for messages from `orders/notifications`.
 10. The broker hands over a message in **peek-lock** mode. The message isn't deleted. It's **locked** to this consumer for 30 seconds (`LockDuration` in `Config.json`), so no other consumer can take it.
-11. The handler:
-    1. checks `Subject` and `SchemaVersion`. Anything unexpected is **dead-lettered at once**: it's a permanent failure, so retrying it is pointless.
-    2. deserializes the body. Invalid JSON is also dead-lettered at once.
-    3. checks the **processed-message store**. If this `MessageId` was already handled, it logs `Duplicate … skipping` and completes the message without doing the work again.
-    4. does the work. Here that's logging `EMAIL SENT for order {OrderId}`.
-    5. records the `MessageId` as processed.
-12. Finally the handler calls **`CompleteMessageAsync`**. Only now does the broker delete the message.
+11. The `SubscriptionProcessor`:
+    1. looks up the handler registered for the message's `Subject`, and checks `SchemaVersion`. Anything unexpected is **dead-lettered at once** (`UnknownSubject`, `InvalidMessage`): it's a permanent failure, so retrying it is pointless.
+    2. deserializes the body to the type registered for that subject. Invalid JSON is also dead-lettered at once (`DeserializationFailed`).
+    3. checks the **processed-message store**, keyed by `subscription:MessageId`. If it was already handled, it logs `Duplicate … skipping` and completes the message without doing the work again.
+    4. calls the handler, `OrderPlacedHandler`, in its own DI scope. The handler does the work: here that's logging `EMAIL SENT for order {OrderId}`. If the handler throws, the processor **abandons** the message and it's retried.
+    5. records the message as processed.
+12. Finally the processor calls **`CompleteMessageAsync`**. Only now does the broker delete the message.
+
+The handler contains only business logic. Everything in steps 11.1–11.3, 11.5 and 12 is the same for every service, so it's written once, in Messaging.
 
 ```
 Active ──(receive)──▶ Locked ──(complete)──▶ deleted ✅
@@ -161,6 +175,14 @@ Active ──(receive)──▶ Locked ──(complete)──▶ deleted ✅
 | The processed-message store is checked **before** the work and written **after** it               | A crash between the work and the write causes a duplicate, but never a lost email.                                                                                         |
 | Duplicates are still **completed**                                                                | Otherwise the lock would expire, the message would come back, and it would end up in the DLQ as if it had failed.                                                          |
 | `StopProcessingAsync` runs before `base.StopAsync`                                                | On shutdown (Ctrl+C), the message currently being handled finishes cleanly.                                                                                                |
+| Broker plumbing lives in a shared **Messaging** library; services only implement `IEventHandler<TEvent>` | Validation, dedupe and complete/dead-letter are identical in every consumer. Written once, they're fixed once. The library holds **plumbing only**, never business rules, because every service depends on its version. |
+| Messaging does **not** reference Contracts                                                        | The library works for any event type. It never needs a rebuild when an event changes, and business types can't creep into it.                                              |
+| Handlers are found **by Subject**                                                                 | One subscription can carry several event types (in step 4, OrderService's `inventory` subscription gets both `StockReserved` and `StockReservationFailed`).                 |
+| Each registration captures its event and handler types in two lambdas                             | The processor deserializes and calls the right handler without reflection, and `Handle<TEvent, THandler>()` won't compile if the handler doesn't match the event.          |
+| **One DI scope per message**                                                                      | Each message is its own unit of work. In step 3 the scope holds a `DbContext`, which must never be shared between messages.                                                 |
+| The processor never catches the handler's exceptions                                              | Throwing is how a handler says "try again later": the processor abandons the message, and the broker counts the attempt toward `MaxDeliveryCount`.                         |
+| Processors are registered with `AddSingleton<IHostedService>(factory)`, not `AddHostedService<T>()` | `AddHostedService` silently ignores a second registration of the same type, so with several subscriptions only the first would run.                                   |
+| The sender is created inside the publisher's factory and never registered on its own              | Nothing in a service can inject a bare `ServiceBusSender` and skip the envelope (ids, Subject, SchemaVersion).                                                              |
 | Logs contain `OrderId`, `MessageId`, `DeliveryCount` and `CorrelationId`, **not the whole event** | The event contains an email address. Personal data doesn't belong in logs.                                                                                                 |
 | Connection string in **user secrets**                                                             | The emulator key isn't really secret, but a real Azure key is. Build the habit now.                                                                                        |
 | `nuget.config` in the repo                                                                        | Clears any machine-wide package source mapping and maps every package to nuget.org, so the repo builds the same on any machine.                                            |
@@ -189,7 +211,7 @@ Leaving a message without completing it behaves differently, as an earlier exper
 
 **Lessons:**
 
-- A bad message doesn't block the others or retry forever. Someone inspects the DLQ (`GET /debug/peek-dlq`), fixes the cause and resubmits.
+- A bad message doesn't block the others or retry forever. Someone inspects the DLQ (`GET /debug/peek-dlq/orders/notifications`), fixes the cause and resubmits.
 - Service Bus has **no built-in delay between retries**. Transient failures need your own backoff, for example by rescheduling the message.
 - Resubmitting a DLQ message to the _topic_ would deliver it to **every** subscription again, not just the one where it failed.
 
@@ -213,11 +235,11 @@ A redelivery isn't a new send. It's the same message delivered again, so duplica
 - It isn't shared between instances. With competing consumers, a redelivery can land on a **different instance** that has never seen the message.
 - Production uses a **database table with a unique constraint on `MessageId`**, shared by all instances of the service and ideally written in the same transaction as the work (the **inbox pattern**).
 
-**Services vs instances:** _different services_ (notifications, audit) each keep their own processed list, because each must handle every message. _Instances of the same service_ must share one store, because any instance may receive any message, including a redelivery.
+**Services vs instances:** _different services_ (for example NotificationService and, in step 4, InventoryService) each keep their own processed list, because each must handle every message. _Instances of the same service_ must share one store, because any instance may receive any message, including a redelivery.
 
 ### d) A second subscriber → fan-out
 
-The `audit` subscription was added to `Config.json`. A second NotificationService instance reads from it (§8). Every order reaches both subscriptions, and **OrderService didn't change at all**.
+First this was shown with an extra `audit` subscription. With the topic-per-producer layout, `orders` now has four subscriptions (`notifications`, `inventory`, `payment`, `shipping`), one per service that cares about new orders. Stop notification-service, POST one order, and peek all four in `OrderService.http`: the **same MessageId** is waiting in each. Three of them wait for services that don't exist yet, and **OrderService didn't change at all**.
 **Lesson:** this is the loose coupling a topic gives you. Several instances on the _same_ subscription instead **split** the messages between them (competing consumers), which is how you scale out.
 
 ### e) The dual-write problem (discussion, not built)
@@ -238,37 +260,49 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
 ```
 .
 ├─ README.md                      ← this file
-├─ EventDemo.slnx                 ← solution file (.NET 10's XML format); groups the 3 projects
+├─ EventDemo.slnx                 ← solution file (.NET 10's XML format); groups the 5 projects
 ├─ global.json                    ← pins the .NET SDK to 10.x
 ├─ nuget.config                   ← maps every package to nuget.org
 ├─ .gitignore                     ← standard .NET ignores, plus infra/.env
 ├─ .dockerignore                  ← keeps bin/, obj/, .git and infra/.env out of image builds
 ├─ docs\
-│  └─ ROADMAP.md                  ← next phase: 5 microservices, outbox/inbox, tracing, Kubernetes
+│  ├─ ROADMAP.md                  ← next phase: 5 microservices, outbox/inbox, tracing, Kubernetes
+│  └─ MILESTONE-2.md              ← step-by-step guide and progress for roadmap step 2
 │
 ├─ infra\                         ← everything needed to run the system locally
 │  ├─ docker-compose.yaml         ← four containers: mssql, servicebus-emulator, order-service, notification-service
-│  ├─ Config.json                 ← namespace, topic "orders", subscriptions "notifications" + "audit"
+│  ├─ Config.json                 ← namespace, 4 topics (one per producer), 13 subscriptions, filters
 │  └─ .env                        ← SQL password + EULA flag (NOT committed)
 │
 └─ src\
-   ├─ Contracts\
-   │  └─ OrderPlacedEvent.cs      ← the event shape both services agree on
+   ├─ Contracts\                  ← what the services agree on
+   │  ├─ OrderPlacedEvent.cs, StockReservedEvent.cs, …  ← the 6 event shapes
+   │  ├─ Topics.cs                ← topic names
+   │  └─ EventSubjects.cs         ← Subject of each event; Config.json filters match these exactly
+   │
+   ├─ Messaging\                  ← SHARED: all broker plumbing (no business logic, no Contracts reference)
+   │  ├─ MessageEnvelope.cs       ← builds every ServiceBusMessage: ids, Subject, ContentType, SchemaVersion
+   │  ├─ IEventPublisher.cs, ServiceBusEventPublisher.cs  ← publishing to the service's own topic
+   │  ├─ IEventHandler.cs, MessageContext.cs              ← what a service implements to consume
+   │  ├─ SubscriptionRegistration.cs  ← AddSubscription(...).Handle<TEvent, THandler>(subject)
+   │  ├─ SubscriptionProcessor.cs ← BackgroundService per subscription: validate, dispatch, dedupe, complete / dead-letter
+   │  ├─ IProcessedMessageStore.cs ← idempotency store (in-memory, demo only)
+   │  ├─ ServiceCollectionExtensions.cs ← AddServiceBus, AddEventPublisher, AddSubscription
+   │  └─ DebugEndpoints.cs        ← GET /debug/peek/{topic}/{sub}, /debug/peek-dlq/{topic}/{sub}
+   │
+   ├─ ServiceDefaults\            ← SHARED: AddServiceDefaults() / MapDefaultEndpoints() → /health
    │
    ├─ OrderService\               ← PUBLISHER
    │  ├─ Dockerfile               ← multi-stage build (SDK → ASP.NET runtime), runs as non-root on :8080
-   │  ├─ Program.cs               ← client/sender singletons, POST /orders, debug peek endpoints
+   │  ├─ Program.cs               ← AddServiceBus + AddEventPublisher(Topics.Orders), POST /orders, debug endpoints (Development)
    │  ├─ DTOs\
    │  │  └─ PlaceOrderRequestDTO.cs  ← the API contract (what a client sends)
-   │  ├─ appsettings.json         ← ServiceBus:TopicName = "orders"
    │  └─ OrderService.http        ← requests to send from VS Code (REST Client extension)
    │
    └─ NotificationService\        ← SUBSCRIBER
       ├─ Dockerfile               ← same pattern as OrderService's
-      ├─ Program.cs               ← client, processor, processed-message store, hosted consumer
-      ├─ OrderPlacedConsumer.cs   ← BackgroundService: validate, dedupe, work, complete / dead-letter
-      ├─ IProcessedMessageStore.cs ← idempotency store (in-memory, demo only)
-      └─ appsettings.json         ← ServiceBus:TopicName + SubscriptionName
+      ├─ Program.cs               ← AddServiceBus + AddSubscription(orders, notifications).Handle<…>
+      └─ OrderPlacedHandler.cs    ← the business part only: EMAIL SENT, plus the poison and flaky test hooks
 ```
 
 Both services read the **connection string** from the config key `ServiceBus:ConnectionString`. Where the value comes from depends on how the service runs:
@@ -319,8 +353,8 @@ curl.exe http://localhost:5300/health     # 200 once the emulator is ready (~30 
 
 | Container              | From your machine                       | What it is                               |
 | ---------------------- | --------------------------------------- | ---------------------------------------- |
-| `order-service`        | http://localhost:5085 (→ 8080 inside)   | The publisher: `POST /orders`, `/debug/*` |
-| `notification-service` | http://localhost:5289 (→ 8080 inside)   | The consumer. It has no API yet          |
+| `order-service`        | http://localhost:5085 (→ 8080 inside)   | The publisher: `POST /orders`, `/debug/*`, `/health` |
+| `notification-service` | http://localhost:5289 (→ 8080 inside)   | The consumer. Only `/health` over HTTP   |
 | `servicebus-emulator`  | `localhost:5672` (AMQP), `5300` (health) | The broker                              |
 | `mssql`                | not published                           | The emulator's storage                   |
 
@@ -363,15 +397,13 @@ dotnet run --project src/NotificationService   # http://localhost:5291 (subscrip
 
 Stop them with **Ctrl+C**, so the consumer shuts down gracefully.
 
-**Optional extra consumers.** These work in either setup, because they reach the broker through `localhost:5672`. Command-line arguments override `appsettings.json`:
+**Optional: competing consumers.** A second NotificationService next to the first (container or `dotnet run`) shares `orders/notifications` with it, and the two split the messages. It works in either setup, because it reaches the broker through `localhost:5672`:
 
 ```bash
-# fan-out: a consumer on the audit subscription
-dotnet run --project src/NotificationService -- --ServiceBus:SubscriptionName=audit --urls http://localhost:5292
-
-# competing consumers: a second instance next to notification-service (container or dotnet run)
 dotnet run --project src/NotificationService -- --urls http://localhost:5293
 ```
+
+The old `--ServiceBus:SubscriptionName=audit` trick is gone: the `audit` subscription was removed, and the subscription name is now in code (`AddSubscription(Topics.Orders, "notifications")`). Fan-out is shown with the peek requests instead (§6d).
 
 ### 3. Send requests
 
@@ -382,16 +414,17 @@ Open `src/OrderService/OrderService.http` and click **Send Request**, or use cur
 | `POST /orders`                               | Places a normal order; returns 202 with the `orderId`                                                                 |
 | `POST /orders` with `"customerId": "poison"` | **Test hook:** the handler always throws → 3 immediate retries → DLQ                                                  |
 | `POST /orders` with `"customerId": "flaky"`  | **Test hook:** the work runs, but the first delivery isn't completed → redelivery after 30 s → `Duplicate … skipping` |
-| `GET /debug/peek`                            | Lists up to 10 messages waiting in `orders/notifications`, **without** consuming them                                 |
-| `GET /debug/peek-dlq`                        | Lists up to 10 dead-lettered messages with their reason and delivery count                                            |
+| `GET /debug/peek/{topic}/{subscription}`     | Lists up to 10 messages waiting in any subscription, e.g. `orders/inventory`, **without** consuming them. The body is the raw JSON |
+| `GET /debug/peek-dlq/{topic}/{subscription}` | Lists up to 10 dead-lettered messages with `DeadLetterReason`, `DeadLetterErrorDescription` and `DeliveryCount`        |
+| `GET /health` (5085 and 5289)                | `Healthy` when the service is up (liveness only for now)                                                              |
 
-The `/debug/*` endpoints and the test hooks exist for learning only. A real service wouldn't ship them, or would enable them only in Development.
+The `/debug/*` endpoints and the test hooks exist for learning only. The debug endpoints are mapped **only in Development**, which is why compose sets `ASPNETCORE_ENVIRONMENT: Development` on both services.
 
 **Consumer offline (temporal decoupling) with containers:**
 
 ```powershell
 docker compose stop notification-service
-# POST an order → 202; GET /debug/peek shows it waiting
+# POST an order → 202; GET /debug/peek/orders/notifications shows it waiting
 docker compose start notification-service
 docker compose logs -f notification-service    # the order is processed on startup
 ```
@@ -416,9 +449,12 @@ docker compose down    # removes the containers; the broker starts empty next ti
 | `services.<name>.<other> … schema` when running compose                       | A YAML indentation mistake: a service is nested inside another. Every service must start at the same column. Check with `docker compose config --services`.                                              |
 | `Failed to determine the https port for redirect` in a container log          | `UseHttpsRedirection()` is running in the container, which only serves HTTP on 8080. This project doesn't use it.                                                                                       |
 | Emulator keeps restarting; log says `Keyword not supported`                   | The SQL password contains `;`.                                                                                                                                                                          |
+| Emulator exits; log says `Max Duplicate detection window supported 5m`        | A topic in `Config.json` has `DuplicateDetectionHistoryTimeWindow` above `PT5M`. The emulator's limit is 5 minutes (real Azure allows 7 days).                                                         |
+| `/debug/...` returns **404** in a container                                   | The service isn't running in Development, where the debug endpoints are mapped. Check `ASPNETCORE_ENVIRONMENT: Development` in `docker-compose.yaml`, then `docker compose up -d`.                     |
+| Startup fails: `Subject '…' already has a handler on …`                       | Two `.Handle<…>()` calls on one subscription use the same subject. Each subject needs exactly one handler per subscription.                                                                           |
 | `NU1100` / "PackageSourceMapping is enabled"                                  | A global NuGet config is blocking packages. The repo's `nuget.config` fixes that; make sure it's present.                                                                                               |
 | Build error "file is locked by OrderService"                                  | A service is still running under `dotnet run`. Stop it, then build.                                                                                                                                     |
-| `/debug/peek` is empty right after a POST                                     | The emulator takes a moment to make a new message readable. Try again after a second or two.                                                                                                            |
+| `/debug/peek/...` is empty right after a POST                                 | The emulator takes a moment to make a new message readable. Try again after a second or two.                                                                                                            |
 
 ---
 
@@ -439,7 +475,7 @@ docker compose down    # removes the containers; the broker starts empty next ti
 ### Next phase: microservices ([docs/ROADMAP.md](docs/ROADMAP.md))
 
 - [x] **Step 1: containers.** Both services run as containers next to the broker (a Dockerfile per service and one compose file).
-- [ ] Step 2: a shared `Messaging` library and a topic per producing service
+- [x] **Step 2: shared libraries and the new topology** ([docs/MILESTONE-2.md](docs/MILESTONE-2.md)). Contracts for all 6 events, one topic per producer with filtered subscriptions, `ServiceDefaults` (`/health`), and a `Messaging` library that does all publishing and consuming. Both services run on it, and all M1 scenarios still pass.
 - [ ] Step 3: a database per service, the outbox and the inbox (this replaces Milestone 7 above)
 - [ ] Step 4: Inventory, Payment and Shipping services: a choreographed saga with compensation
 - [ ] Step 5: OpenTelemetry and the Aspire Dashboard
