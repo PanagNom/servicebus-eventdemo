@@ -9,7 +9,7 @@ public static class DebugEndpoints
     public static IEndpointRouteBuilder MapMessagingDebugEndpoints(this IEndpointRouteBuilder app)
     {
         var debug = app.MapGroup("/debug");
-                
+        
         debug.MapGet("/peek/{topic}/{subscription}", async (ServiceBusClient client, string topic, string subscription) =>
         {
             await using var receiver = client.CreateReceiver(topic, subscription);

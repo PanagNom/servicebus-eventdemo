@@ -2,7 +2,7 @@
 
 **Where we are:** Milestone 1 is done (commit `5c2ea22`, "Containerise the two services"). Milestone 2's six steps are all done and committed, every checkpoint scenario passes, and the repo has been reorganised (see the end of [Progress](#progress)). The overall plan is in [ROADMAP.md](../ROADMAP.md). The [Progress](#progress) section at the end has the details and the results.
 
-**Next session:** start roadmap step 3 (a database per service, the outbox and the inbox). First, confirm the one fan-out check listed under "Not yet confirmed".
+**Next:** roadmap step 3, in [MILESTONE-3.md](MILESTONE-3.md). The one fan-out check under "Not yet confirmed" is still open, and is quick to do before you start.
 
 ---
 

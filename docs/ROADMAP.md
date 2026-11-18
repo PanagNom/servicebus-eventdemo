@@ -94,6 +94,8 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
 
 **Goal:** the README's §6c limits ("lost on restart, not shared") and §6e (dual write) are solved in code.
 
+**Step-by-step guide:** [milestones/MILESTONE-3.md](milestones/MILESTONE-3.md). It refines the tasks below and wins where they differ: the code lives in a separate `Messaging.EntityFrameworkCore` project, there's no `IMessagingDbContext` and no `Topic` column, and `IEventPublisher` is retired.
+
 **Tasks**
 - **Packages:** `Microsoft.EntityFrameworkCore.SqlServer`, plus `dotnet-ef` as a local tool (`dotnet new tool-manifest`, `dotnet tool install dotnet-ef`). Package versions go in `Directory.Packages.props` as `<PackageVersion>`. The csproj only gets a `<PackageReference>` with no version.
 - **One database per service** on the existing `mssql` container: `Server=mssql;Database=OrderDb;User Id=sa;Password=...;TrustServerCertificate=true`.
