@@ -107,7 +107,7 @@ A subscription only receives messages sent **after** it exists. By default it re
 
 ### Publishing (OrderService)
 
-1. A client sends `POST /orders` with a JSON body: product, customer, email, addresses, amount and currency. This is the `PlaceOrderRequestDTO` (the **API contract**).
+1. A client sends `POST /orders` with a JSON body: product, customer, email, addresses, amount and currency. This is the `PlaceOrderRequest` (the **API contract**).
 2. OrderService generates the parts the client shouldn't control: the `OrderId` (`Guid.CreateVersion7()`, which is time-ordered) and `PlacedAt`.
 3. It builds an `OrderPlacedEvent` (the **event contract**, from the Contracts library). The event carries only what consumers need, not the whole request.
 4. It calls `IEventPublisher.PublishAsync(event, EventSubjects.OrderPlaced, messageId: OrderId, correlationId: OrderId)` from the **Messaging** library. Messaging's `MessageEnvelope` wraps the event in a `ServiceBusMessage`, the same way for every service:
@@ -164,7 +164,7 @@ Active ──(receive)──▶ Locked ──(complete)──▶ deleted ✅
 | Decision                                                                                          | Reason                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ServiceBusClient` and `ServiceBusSender` are **singletons**                                      | The client owns one long-lived AMQP connection (TCP, TLS, authentication) and is thread-safe. Creating one per request adds handshake latency and can exhaust connections. |
-| A `PlaceOrderRequestDTO` **separate** from `OrderPlacedEvent`                                     | The public API and the event change for different reasons and are used by different people. Keeping them apart means one can change without breaking the other.            |
+| A `PlaceOrderRequest` **separate** from `OrderPlacedEvent`                                        | The public API and the event change for different reasons and are used by different people. Keeping them apart means one can change without breaking the other.            |
 | The server sets `OrderId` and `PlacedAt`                                                          | The client shouldn't decide ids, timestamps or statuses.                                                                                                                   |
 | `MessageId = OrderId`                                                                             | A stable id means the same order is recognized as a duplicate, whether it comes from a sender retry or a redelivery. A random GUID per attempt would defeat that.          |
 | Envelope data in message properties, **not in the body**                                          | Brokers and consumers can filter, route and trace on properties without deserializing the body.                                                                            |
@@ -260,14 +260,18 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
 ```
 .
 ├─ README.md                      ← this file
-├─ EventDemo.slnx                 ← solution file (.NET 10's XML format); groups the 5 projects
+├─ EventDemo.slnx                 ← solution file (.NET 10's XML format); solution folders match the disk
+├─ Directory.Build.props          ← TargetFramework, Nullable, ImplicitUsings for every project (not repeated in each csproj)
+├─ Directory.Packages.props       ← every NuGet version, once (central package management)
 ├─ global.json                    ← pins the .NET SDK to 10.x
 ├─ nuget.config                   ← maps every package to nuget.org
 ├─ .gitignore                     ← standard .NET ignores, plus infra/.env
 ├─ .dockerignore                  ← keeps bin/, obj/, .git and infra/.env out of image builds
 ├─ docs\
 │  ├─ ROADMAP.md                  ← next phase: 5 microservices, outbox/inbox, tracing, Kubernetes
-│  └─ MILESTONE-2.md              ← step-by-step guide and progress for roadmap step 2
+│  ├─ MESSAGING-EXPLAINED.md      ← how the Messaging library works, and how you'd arrive at its design
+│  └─ milestones\
+│     └─ MILESTONE-2.md           ← step-by-step guide and progress for roadmap step 2
 │
 ├─ infra\                         ← everything needed to run the system locally
 │  ├─ docker-compose.yaml         ← four containers: mssql, servicebus-emulator, order-service, notification-service
@@ -275,40 +279,57 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
 │  └─ .env                        ← SQL password + EULA flag (NOT committed)
 │
 └─ src\
-   ├─ Contracts\                  ← what the services agree on
-   │  ├─ OrderPlacedEvent.cs, StockReservedEvent.cs, …  ← the 6 event shapes
-   │  ├─ Topics.cs                ← topic names
-   │  └─ EventSubjects.cs         ← Subject of each event; Config.json filters match these exactly
+   ├─ Shared\                     ← LIBRARIES: referenced by the services, never deployed on their own
+   │  ├─ Contracts\               ← what the services agree on
+   │  │  ├─ Topics.cs             ← topic names
+   │  │  ├─ EventSubjects.cs      ← Subject of each event; Config.json filters match these exactly
+   │  │  └─ Orders\, Inventory\, Payments\, Shipping\  ← the 6 event shapes, one folder per producing topic
+   │  │
+   │  ├─ Messaging\               ← all broker plumbing (no business logic, no Contracts reference)
+   │  │  ├─ ServiceCollectionExtensions.cs ← the entry point: AddServiceBus, AddEventPublisher, AddSubscription
+   │  │  ├─ Publishing\
+   │  │  │  ├─ MessageEnvelope.cs ← builds every ServiceBusMessage: ids, Subject, ContentType, SchemaVersion
+   │  │  │  └─ IEventPublisher.cs, ServiceBusEventPublisher.cs  ← publishing to the service's own topic
+   │  │  ├─ Consuming\
+   │  │  │  ├─ IEventHandler.cs, MessageContext.cs  ← what a service implements to consume
+   │  │  │  ├─ SubscriptionBuilder.cs        ← .Handle<TEvent, THandler>(subject), the public registration API
+   │  │  │  ├─ SubscriptionRegistration.cs   ← internal: the subject → HandlerEntry table the builder fills
+   │  │  │  └─ SubscriptionProcessor.cs      ← BackgroundService per subscription: validate, dispatch, dedupe, complete / dead-letter
+   │  │  ├─ Idempotency\
+   │  │  │  ├─ IProcessedMessageStore.cs     ← "was this message already handled?"
+   │  │  │  └─ InMemoryProcessedMessageStore.cs  ← the demo implementation (lost on restart)
+   │  │  └─ Diagnostics\
+   │  │     └─ DebugEndpoints.cs  ← GET /debug/peek/{topic}/{sub}, /debug/peek-dlq/{topic}/{sub}
+   │  │
+   │  └─ ServiceDefaults\         ← AddServiceDefaults() / MapDefaultEndpoints() → /health
    │
-   ├─ Messaging\                  ← SHARED: all broker plumbing (no business logic, no Contracts reference)
-   │  ├─ ServiceCollectionExtensions.cs ← the entry point: AddServiceBus, AddEventPublisher, AddSubscription
-   │  ├─ Publishing\
-   │  │  ├─ MessageEnvelope.cs    ← builds every ServiceBusMessage: ids, Subject, ContentType, SchemaVersion
-   │  │  └─ IEventPublisher.cs, ServiceBusEventPublisher.cs  ← publishing to the service's own topic
-   │  ├─ Consuming\
-   │  │  ├─ IEventHandler.cs, MessageContext.cs  ← what a service implements to consume
-   │  │  ├─ SubscriptionRegistration.cs  ← AddSubscription(...).Handle<TEvent, THandler>(subject)
-   │  │  └─ SubscriptionProcessor.cs  ← BackgroundService per subscription: validate, dispatch, dedupe, complete / dead-letter
-   │  ├─ Idempotency\
-   │  │  ├─ IProcessedMessageStore.cs  ← "was this message already handled?"
-   │  │  └─ InMemoryProcessedMessageStore.cs  ← the demo implementation (lost on restart)
-   │  └─ Diagnostics\
-   │     └─ DebugEndpoints.cs     ← GET /debug/peek/{topic}/{sub}, /debug/peek-dlq/{topic}/{sub}
-   │
-   ├─ ServiceDefaults\            ← SHARED: AddServiceDefaults() / MapDefaultEndpoints() → /health
-   │
-   ├─ OrderService\               ← PUBLISHER
-   │  ├─ Dockerfile               ← multi-stage build (SDK → ASP.NET runtime), runs as non-root on :8080
-   │  ├─ Program.cs               ← AddServiceBus + AddEventPublisher(Topics.Orders), POST /orders, debug endpoints (Development)
-   │  ├─ DTOs\
-   │  │  └─ PlaceOrderRequestDTO.cs  ← the API contract (what a client sends)
-   │  └─ OrderService.http        ← requests to send from VS Code (REST Client extension)
-   │
-   └─ NotificationService\        ← SUBSCRIBER
-      ├─ Dockerfile               ← same pattern as OrderService's
-      ├─ Program.cs               ← AddServiceBus + AddSubscription(orders, notifications).Handle<…>
-      └─ OrderPlacedHandler.cs    ← the business part only: EMAIL SENT, plus the poison and flaky test hooks
+   └─ Services\                   ← DEPLOYABLES: one container each, same layout in every service
+      ├─ OrderService\            ← PUBLISHER
+      │  ├─ Dockerfile            ← multi-stage build (SDK → ASP.NET runtime), runs as non-root on :8080
+      │  ├─ Program.cs            ← wiring only: AddServiceBus + AddEventPublisher(Topics.Orders), MapOrderEndpoints, debug endpoints (Development)
+      │  ├─ Endpoints\
+      │  │  ├─ OrderEndpoints.cs  ← POST /orders: builds OrderPlacedEvent and publishes it
+      │  │  └─ PlaceOrderRequest.cs  ← the API contract (what a client sends)
+      │  └─ OrderService.http     ← requests to send from VS Code (REST Client extension)
+      │
+      └─ NotificationService\     ← SUBSCRIBER
+         ├─ Dockerfile            ← same pattern as OrderService's
+         ├─ Program.cs            ← wiring only: AddServiceBus + AddSubscription(orders, notifications).Handle<…>
+         └─ Handlers\
+            └─ OrderPlacedHandler.cs  ← the business part only: EMAIL SENT, plus the poison and flaky test hooks
 ```
+
+**Every service follows the same layout,** so the M4 services look like these two:
+
+| Folder | What goes in it | Arrives in |
+|---|---|---|
+| `Program.cs` | wiring only: `AddServiceDefaults`, `AddServiceBus`, `AddSubscription…`, `Map…Endpoints` | now |
+| `Endpoints\` | the HTTP API: a `Map…Endpoints()` extension, plus request and response records | now (Order) |
+| `Handlers\` | one `IEventHandler<T>` per event the service consumes | now (Notification) |
+| `Domain\` | entities and rules, e.g. `Order`, `OrderStatus` with guarded transitions | M3 |
+| `Data\` | the `DbContext` and `Migrations\` | M3 |
+
+Folders appear only when there's something to put in them. Namespaces follow the folders in the services (`OrderService.Endpoints`). The two libraries keep one namespace each (`Contracts`, `Messaging`), so a service needs only one `using` per library.
 
 Both services read the **connection string** from the config key `ServiceBus:ConnectionString`. Where the value comes from depends on how the service runs:
 
@@ -387,8 +408,8 @@ docker compose stop order-service notification-service   # if they were running
 Set the connection string once per project. Outside Docker the broker is at `localhost`:
 
 ```bash
-dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;" --project src/OrderService
-dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;" --project src/NotificationService
+dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;" --project src/Services/OrderService
+dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;" --project src/Services/NotificationService
 ```
 
 `SAS_KEY_VALUE` is the emulator's literal, documented key. Don't replace it.
@@ -396,8 +417,8 @@ dotnet user-secrets set "ServiceBus:ConnectionString" "Endpoint=sb://localhost;S
 Then, each in its own terminal, from the repo root:
 
 ```bash
-dotnet run --project src/OrderService          # http://localhost:5085
-dotnet run --project src/NotificationService   # http://localhost:5291 (subscription: notifications)
+dotnet run --project src/Services/OrderService          # http://localhost:5085
+dotnet run --project src/Services/NotificationService   # http://localhost:5291 (subscription: notifications)
 ```
 
 Stop them with **Ctrl+C**, so the consumer shuts down gracefully.
@@ -405,14 +426,14 @@ Stop them with **Ctrl+C**, so the consumer shuts down gracefully.
 **Optional: competing consumers.** A second NotificationService next to the first (container or `dotnet run`) shares `orders/notifications` with it, and the two split the messages. It works in either setup, because it reaches the broker through `localhost:5672`:
 
 ```bash
-dotnet run --project src/NotificationService -- --urls http://localhost:5293
+dotnet run --project src/Services/NotificationService -- --urls http://localhost:5293
 ```
 
 The old `--ServiceBus:SubscriptionName=audit` trick is gone: the `audit` subscription was removed, and the subscription name is now in code (`AddSubscription(Topics.Orders, "notifications")`). Fan-out is shown with the peek requests instead (§6d).
 
 ### 3. Send requests
 
-Open `src/OrderService/OrderService.http` and click **Send Request**, or use curl. Both setups use http://localhost:5085.
+Open `src/Services/OrderService/OrderService.http` and click **Send Request**, or use curl. Both setups use http://localhost:5085.
 
 | Request                                      | What it does                                                                                                          |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -480,7 +501,7 @@ docker compose down    # removes the containers; the broker starts empty next ti
 ### Next phase: microservices ([docs/ROADMAP.md](docs/ROADMAP.md))
 
 - [x] **Step 1: containers.** Both services run as containers next to the broker (a Dockerfile per service and one compose file).
-- [x] **Step 2: shared libraries and the new topology** ([docs/MILESTONE-2.md](docs/MILESTONE-2.md)). Contracts for all 6 events, one topic per producer with filtered subscriptions, `ServiceDefaults` (`/health`), and a `Messaging` library that does all publishing and consuming. Both services run on it, and all M1 scenarios still pass.
+- [x] **Step 2: shared libraries and the new topology** ([docs/milestones/MILESTONE-2.md](docs/milestones/MILESTONE-2.md)). Contracts for all 6 events, one topic per producer with filtered subscriptions, `ServiceDefaults` (`/health`), and a `Messaging` library that does all publishing and consuming. Both services run on it, and all M1 scenarios still pass.
 - [ ] Step 3: a database per service, the outbox and the inbox (this replaces Milestone 7 above)
 - [ ] Step 4: Inventory, Payment and Shipping services: a choreographed saga with compensation
 - [ ] Step 5: OpenTelemetry and the Aspire Dashboard

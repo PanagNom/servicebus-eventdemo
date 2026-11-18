@@ -1,9 +1,24 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/Contracts/Contracts.csproj" />
-    <Project Path="src/Messaging/Messaging.csproj" />
-    <Project Path="src/NotificationService/NotificationService.csproj" />
-    <Project Path="src/OrderService/OrderService.csproj" />
-    <Project Path="src/ServiceDefaults/ServiceDefaults.csproj" />
+  <Folder Name="/Solution Items/">
+    <File Path=".dockerignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="nuget.config" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/infra/">
+    <File Path="infra/Config.json" />
+    <File Path="infra/docker-compose.yaml" />
+  </Folder>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Services/">
+    <Project Path="src/Services/NotificationService/NotificationService.csproj" />
+    <Project Path="src/Services/OrderService/OrderService.csproj" />
+  </Folder>
+  <Folder Name="/src/Shared/">
+    <Project Path="src/Shared/Contracts/Contracts.csproj" />
+    <Project Path="src/Shared/Messaging/Messaging.csproj" />
+    <Project Path="src/Shared/ServiceDefaults/ServiceDefaults.csproj" />
   </Folder>
 </Solution>

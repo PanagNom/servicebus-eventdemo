@@ -1,6 +1,6 @@
 # How the Messaging library works
 
-A walkthrough of `src/Messaging`, as built in Milestone 2. It covers what each file does, how one message flows through publishing and consuming, and why the code is shaped the way it is. §11 shows how you'd arrive at this design step by step. Related: [ROADMAP.md](ROADMAP.md), [MILESTONE-2.md](MILESTONE-2.md), and README §4–§5.
+A walkthrough of `src/Shared/Messaging`, as built in Milestone 2. It covers what each file does, how one message flows through publishing and consuming, and why the code is shaped the way it is. §11 shows how you'd arrive at this design step by step. Related: [ROADMAP.md](ROADMAP.md), [MILESTONE-2.md](milestones/MILESTONE-2.md), and README §4–§5.
 
 ## 1. The 30-second version
 
@@ -46,7 +46,8 @@ The folders match these groups. Every file uses the single `Messaging` namespace
 | | `ServiceBusEventPublisher.cs` | The implementation: envelope, then send |
 | `Consuming/` | `IEventHandler.cs` | What a service implements to consume one event type |
 | | `MessageContext.cs` | Envelope info handed to a handler, plus the flaky test hook |
-| | `SubscriptionRegistration.cs` | The table "subject → how to deserialize, which handler", plus the `.Handle<…>()` builder |
+| | `SubscriptionBuilder.cs` | What `AddSubscription(...)` returns: the public `.Handle<TEvent, THandler>(subject)` that fills the table |
+| | `SubscriptionRegistration.cs` | Internal: the table "subject → how to deserialize, which handler" (`HandlerEntry`) |
 | | `SubscriptionProcessor.cs` | The background worker that receives and processes messages |
 | `Idempotency/` | `IProcessedMessageStore.cs` | The contract: "was this message already handled?" and "mark it handled" |
 | | `InMemoryProcessedMessageStore.cs` | The demo implementation: a dictionary, lost on restart. The M3 database inbox goes next to it |
@@ -299,7 +300,7 @@ The question to ask is **"what's different each time, and what's the same?"**
 
 **The left column belongs to the service, and the right column goes into a library.** The business logic needs a shape the library can call, hence `IEventHandler<TEvent>`.
 
-→ `Consuming/IEventHandler.cs`, plus `NotificationService/OrderPlacedHandler.cs`, which holds only business code.
+→ `Consuming/IEventHandler.cs`, plus `NotificationService/Handlers/OrderPlacedHandler.cs`, which holds only business code.
 
 ### Step 2: "Write the code I *wish* I could write"
 
@@ -317,7 +318,7 @@ Then work backward from it:
 - `Handle` must remember "subject → handler" **somewhere the processor can read later**. That's the shared `SubscriptionRegistration`.
 - One subscription can receive **several** subjects. In M4, `payments/order` receives both `PaymentSucceeded` and `PaymentFailed`. So `.Handle` must be chainable more than once, and the registration holds a **dictionary**.
 
-→ `Consuming/SubscriptionRegistration.cs`, where `Handlers` is a `Dictionary<string, HandlerEntry>`.
+→ `Consuming/SubscriptionBuilder.cs` (the `.Handle` you call) and `Consuming/SubscriptionRegistration.cs` (what it fills: `Handlers`, a `Dictionary<string, HandlerEntry>`).
 
 ### Step 3: "The library doesn't know what `OrderPlacedEvent` is" (the hard step)
 
@@ -335,7 +336,7 @@ new HandlerEntry(
     (sp, evt, ctx, ct) => sp.GetRequiredService<THandler>().HandleAsync((TEvent)evt, ctx, ct));
 ```
 
-The processor calls `entry.Deserialize(...)` and `entry.Invoke(...)` without knowing the types. **The lambdas remember them.** That's why, at runtime, the trace jumps from the processor back into `SubscriptionRegistration.cs`. Those lambdas were written at registration time, and they run when a message arrives.
+The processor calls `entry.Deserialize(...)` and `entry.Invoke(...)` without knowing the types. **The lambdas remember them.** That's why, at runtime, the trace jumps from the processor back into `SubscriptionBuilder.cs`. Those lambdas were written at registration time, and they run when a message arrives.
 
 ### Step 4: "How does the processor get *its* registration?"
 

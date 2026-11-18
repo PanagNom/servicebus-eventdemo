@@ -1,7 +1,7 @@
 using Contracts;
 using Messaging;
 
-namespace NotificationService;
+namespace NotificationService.Handlers;
 
 /// <summary>
 /// Reacts to an order being placed by "sending" a confirmation email.

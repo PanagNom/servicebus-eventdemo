@@ -3,18 +3,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Messaging;
 
-internal sealed record HandlerEntry(Func<string, object?> Deserialize, Func<IServiceProvider, object, MessageContext, CancellationToken, Task> Invoke);
-
-// One topic + subscription and everything it can handle. Shared (not copied) between
-// the builder, which fills it, and the SubscriptionProcessor, which reads it at startup.
-internal sealed class SubscriptionRegistration
-{
-    public required string Topic { get; init; }
-    public required string Subscription { get; init; }
-
-    public Dictionary<string, HandlerEntry> Handlers { get; } = [];
-}
-
 // What AddSubscription(...) returns, so you can chain .Handle<…>() calls.
 public sealed class SubscriptionBuilder
 {

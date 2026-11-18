@@ -1,6 +1,6 @@
 using Contracts;
 using Messaging;
-using NotificationService;
+using NotificationService.Handlers;
 using ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);

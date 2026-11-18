@@ -44,7 +44,7 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
   - Stage 2: `mcr.microsoft.com/dotnet/aspnet:10.0`, `USER $APP_UID`, `ENTRYPOINT ["dotnet", "OrderService.dll"]`. The image listens on 8080 by default (`ASPNETCORE_HTTP_PORTS`).
 - Add a root `.dockerignore`: `**/bin`, `**/obj`, `infra/.env`, `.git`, `.vs`.
 - Add both services to [infra/docker-compose.yaml](../infra/docker-compose.yaml):
-  - `build: { context: .., dockerfile: src/OrderService/Dockerfile }`
+  - `build: { context: .., dockerfile: src/Services/OrderService/Dockerfile }`
   - `ports: "5085:8080"`
   - join the `sb-emulator` network
   - `depends_on: emulator`
@@ -52,7 +52,7 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
 
 **Pitfalls**
 - Inside the compose network the emulator **isn't `localhost`**. Use `Endpoint=sb://servicebus-emulator;...` (its service or container name).
-- `UseHttpsRedirection()` in [OrderService/Program.cs](../src/OrderService/Program.cs#L22) causes trouble on HTTP-only containers. Remove it or limit it to Development.
+- `UseHttpsRedirection()` in OrderService/Program.cs causes trouble on HTTP-only containers. Remove it or limit it to Development.
 - `global.json` must allow the SDK version that's in the image. Check `rollForward`.
 - User secrets aren't loaded in a Release container (they only load in Development), which is why config comes from environment variables.
 - The emulator restarts while SQL is still starting. Your services must tolerate a broker that isn't ready yet (the processor retries; the first `SendMessageAsync` may fail).
@@ -68,14 +68,14 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
 **Goal:** the consume and publish plumbing lives in one library, and the services only contain business handlers.
 
 **Tasks**
-- **`src/Contracts`:** add the 6 events (extend `OrderPlacedEvent` with ProductId, Quantity, ShippingAddress, PaymentMethod) and an `EventSubjects` constants class.
-- **`src/Messaging`** (class library; `<FrameworkReference Include="Microsoft.AspNetCore.App" />` lets it use hosting and DI):
+- **`src/Shared/Contracts`:** add the 6 events (extend `OrderPlacedEvent` with ProductId, Quantity, ShippingAddress, PaymentMethod) and an `EventSubjects` constants class.
+- **`src/Shared/Messaging`** (class library; `<FrameworkReference Include="Microsoft.AspNetCore.App" />` lets it use hosting and DI):
   - **An envelope builder:** move lines 37–42 of OrderService/Program.cs into it.
   - **`IEventHandler<TEvent>`:** `Task HandleAsync(TEvent evt, MessageContext ctx, CancellationToken ct)`. `MessageContext` exposes MessageId, CorrelationId and DeliveryCount.
-  - **`SubscriptionProcessor`:** a `BackgroundService`, one per (topic, subscription). Move the logic from [OrderPlacedConsumer.cs](../src/NotificationService/OrderPlacedConsumer.cs) here: validate Subject and SchemaVersion, deserialize, dead-letter permanent failures, dispatch by Subject to the registered handler, complete.
+  - **`SubscriptionProcessor`:** a `BackgroundService`, one per (topic, subscription). Move the logic from `OrderPlacedConsumer.cs` (deleted in M2) here: validate Subject and SchemaVersion, deserialize, dead-letter permanent failures, dispatch by Subject to the registered handler, complete.
   - **A registration API:** e.g. `services.AddSubscription("inventory", "payment").Handle<StockReserved, StockReservedHandler>(EventSubjects.StockReserved)`.
 - **Handler scope:** create one with `IServiceScopeFactory.CreateAsyncScope()` per message. Handlers will need scoped DbContexts in M3.
-- **`src/ServiceDefaults`:** `AddServiceDefaults(this IHostApplicationBuilder)`. For now just health checks (`/health`); OpenTelemetry comes in M5.
+- **`src/Shared/ServiceDefaults`:** `AddServiceDefaults(this IHostApplicationBuilder)`. For now just health checks (`/health`); OpenTelemetry comes in M5.
 - **[infra/Config.json](../infra/Config.json):** 4 topics and their subscriptions with **rules** (correlation filter on `Label`, which is Subject). Look up the emulator's Config.json rule schema in Microsoft's emulator repo samples. Several rules on one subscription combine as OR. Set `MaxDeliveryCount: 10` on subscriptions where an out-of-order prerequisite is possible.
 
 **Pitfalls**
@@ -95,7 +95,7 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
 **Goal:** the README's §6c limits ("lost on restart, not shared") and §6e (dual write) are solved in code.
 
 **Tasks**
-- **Packages:** `Microsoft.EntityFrameworkCore.SqlServer`, plus `dotnet-ef` as a local tool (`dotnet new tool-manifest`, `dotnet tool install dotnet-ef`).
+- **Packages:** `Microsoft.EntityFrameworkCore.SqlServer`, plus `dotnet-ef` as a local tool (`dotnet new tool-manifest`, `dotnet tool install dotnet-ef`). Package versions go in `Directory.Packages.props` as `<PackageVersion>`. The csproj only gets a `<PackageReference>` with no version.
 - **One database per service** on the existing `mssql` container: `Server=mssql;Database=OrderDb;User Id=sa;Password=...;TrustServerCertificate=true`.
 - **In Messaging:**
   - `OutboxMessage` (Id, Topic, Subject, MessageId, CorrelationId, Body, TraceParent, CreatedAt, SentAt?)
@@ -136,7 +136,7 @@ Client ─▶ OrderService ─(outbox)─▶ topic orders: OrderPlaced
 **Goal:** the full choreographed flow, with compensation.
 
 **Tasks**
-- 3 new web projects. Copy the structure of the services you already have, add them to `EventDemo.slnx` and add a Dockerfile and compose entry for each (ports 5086, 5087, 5088).
+- 3 new web projects under `src/Services/`, using the service layout in README §7 (`Program.cs` for wiring, `Endpoints/`, `Handlers/`, `Domain/`, `Data/`). Add them to `EventDemo.slnx` and add a Dockerfile and compose entry for each (ports 5086, 5087, 5088).
 - **Inventory:**
   - a seeded `Products` table and a `Reservations` table
   - OrderPlaced → reserve stock → StockReserved or StockReservationFailed
@@ -203,4 +203,4 @@ Update as you go, then do a final pass:
 
 ## How to check each milestone
 
-Every milestone ends with: `dotnet build EventDemo.slnx`, `docker compose up -d --build`, and that milestone's "Done when" scenarios run through [OrderService.http](../src/OrderService/OrderService.http). Commit once they pass.
+Every milestone ends with: `dotnet build EventDemo.slnx`, `docker compose up -d --build`, and that milestone's "Done when" scenarios run through [OrderService.http](../src/Services/OrderService/OrderService.http). Commit once they pass.
