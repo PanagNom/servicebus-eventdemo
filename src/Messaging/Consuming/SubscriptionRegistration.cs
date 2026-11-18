@@ -3,9 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Messaging;
 
-internal sealed record HandlerEntry(
-    Func<string, object?> Deserialize,
-    Func<IServiceProvider, object, MessageContext, CancellationToken, Task> Invoke);
+internal sealed record HandlerEntry(Func<string, object?> Deserialize, Func<IServiceProvider, object, MessageContext, CancellationToken, Task> Invoke);
 
 // One topic + subscription and everything it can handle. Shared (not copied) between
 // the builder, which fills it, and the SubscriptionProcessor, which reads it at startup.
@@ -29,17 +27,14 @@ public sealed class SubscriptionBuilder
         _registration = registration;
     }
 
-    public SubscriptionBuilder Handle<TEvent, THandler>(string subject)
-        where TEvent : class
-        where THandler : class, IEventHandler<TEvent>
+    public SubscriptionBuilder Handle<TEvent, THandler>(string subject) where TEvent : class where THandler : class, IEventHandler<TEvent>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
 
         // Two handlers for one subject would silently replace each other, so fail at startup instead.
         if (_registration.Handlers.ContainsKey(subject))
         {
-            throw new InvalidOperationException(
-                $"Subject '{subject}' already has a handler on {_registration.Topic}/{_registration.Subscription}.");
+            throw new InvalidOperationException($"Subject '{subject}' already has a handler on {_registration.Topic}/{_registration.Subscription}.");
         }
 
         _services.AddScoped<THandler>();

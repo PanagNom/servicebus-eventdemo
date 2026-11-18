@@ -58,8 +58,7 @@ public static class ServiceCollectionExtensions
         // A factory registration, not AddHostedService<SubscriptionProcessor>(): AddHostedService
         // ignores a second registration of the same type, so only the first subscription would run.
         // The lambda captures this call's own `registration`.
-        services.AddSingleton<IHostedService>(sp => new SubscriptionProcessor(
-            registration,
+        services.AddSingleton<IHostedService>(sp => new SubscriptionProcessor(registration,
             sp.GetRequiredService<ServiceBusClient>(),
             sp.GetRequiredService<IServiceScopeFactory>(),
             sp.GetRequiredService<IProcessedMessageStore>(),

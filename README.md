@@ -281,14 +281,19 @@ Waiting for an acknowledgement doesn't help: `SendMessageAsync` already _is_ the
    │  └─ EventSubjects.cs         ← Subject of each event; Config.json filters match these exactly
    │
    ├─ Messaging\                  ← SHARED: all broker plumbing (no business logic, no Contracts reference)
-   │  ├─ MessageEnvelope.cs       ← builds every ServiceBusMessage: ids, Subject, ContentType, SchemaVersion
-   │  ├─ IEventPublisher.cs, ServiceBusEventPublisher.cs  ← publishing to the service's own topic
-   │  ├─ IEventHandler.cs, MessageContext.cs              ← what a service implements to consume
-   │  ├─ SubscriptionRegistration.cs  ← AddSubscription(...).Handle<TEvent, THandler>(subject)
-   │  ├─ SubscriptionProcessor.cs ← BackgroundService per subscription: validate, dispatch, dedupe, complete / dead-letter
-   │  ├─ IProcessedMessageStore.cs ← idempotency store (in-memory, demo only)
-   │  ├─ ServiceCollectionExtensions.cs ← AddServiceBus, AddEventPublisher, AddSubscription
-   │  └─ DebugEndpoints.cs        ← GET /debug/peek/{topic}/{sub}, /debug/peek-dlq/{topic}/{sub}
+   │  ├─ ServiceCollectionExtensions.cs ← the entry point: AddServiceBus, AddEventPublisher, AddSubscription
+   │  ├─ Publishing\
+   │  │  ├─ MessageEnvelope.cs    ← builds every ServiceBusMessage: ids, Subject, ContentType, SchemaVersion
+   │  │  └─ IEventPublisher.cs, ServiceBusEventPublisher.cs  ← publishing to the service's own topic
+   │  ├─ Consuming\
+   │  │  ├─ IEventHandler.cs, MessageContext.cs  ← what a service implements to consume
+   │  │  ├─ SubscriptionRegistration.cs  ← AddSubscription(...).Handle<TEvent, THandler>(subject)
+   │  │  └─ SubscriptionProcessor.cs  ← BackgroundService per subscription: validate, dispatch, dedupe, complete / dead-letter
+   │  ├─ Idempotency\
+   │  │  ├─ IProcessedMessageStore.cs  ← "was this message already handled?"
+   │  │  └─ InMemoryProcessedMessageStore.cs  ← the demo implementation (lost on restart)
+   │  └─ Diagnostics\
+   │     └─ DebugEndpoints.cs     ← GET /debug/peek/{topic}/{sub}, /debug/peek-dlq/{topic}/{sub}
    │
    ├─ ServiceDefaults\            ← SHARED: AddServiceDefaults() / MapDefaultEndpoints() → /health
    │

@@ -1,16 +1,6 @@
-namespace Messaging;
-
 using System.Collections.Concurrent;
 
-/// <summary>
-/// Remembers which messages have already been handled, so a redelivered message
-/// (at-least-once delivery) doesn't repeat its side effects.
-/// </summary>
-public interface IProcessedMessageStore
-{
-    bool HasBeenProcessed(string messageId);
-    void MarkProcessed(string messageId);
-}
+namespace Messaging;
 
 /// <summary>
 /// Demo-only store. It's lost on restart and not shared between instances.
