@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dockerizing the Service Bus Demo</title>
+  <link rel="stylesheet" href="/presentation.css">
+</head>
+<body>
+  <main class="presentation" aria-label="Docker and Docker Compose presentation">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">SB</span><span>Container Architecture</span></div>
+      <div class="progress" aria-label="Slide progress"><span id="progressText">1 / 8</span></div>
+    </header>
+
+    <section class="slide active" data-title="Dockerizing the Service Bus Demo">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">.NET 10 · Docker · Azure Service Bus</p>
+          <h1>Dockerizing the<br><span>event demo</span></h1>
+          <p class="lede">How source becomes containers—and how four containers become one local system.</p>
+        </div>
+        <div class="diagram hero-diagram" aria-label="Container architecture overview">
+          <div class="node accent">OrderService<small>:5085 → :8080</small></div>
+          <div class="arrow">publishes</div>
+          <div class="node broker">Service Bus<small>sb-emulator:5672</small></div>
+          <div class="arrow">delivers</div>
+          <div class="node">Notification<small>:5289 → :8080</small></div>
+          <div class="sql-node">SQL Server<small>emulator state</small></div>
+        </div>
+      </div>
+      <div class="key-line"><b>Dockerfile</b> packages one service <span>•</span> <b>Docker Compose</b> connects the whole environment</div>
+    </section>
+
+    <section class="slide" data-title="The Dockerfile pattern">
+      <div class="section-heading">
+        <p class="eyebrow">Both services</p>
+        <h2>One Dockerfile, two optimized stages</h2>
+      </div>
+      <div class="stage-grid">
+        <article class="stage">
+          <div class="stage-number">1</div>
+          <h3>Build stage</h3>
+          <p>Starts from the full .NET SDK.</p>
+          <ul>
+            <li>Copies restore metadata first</li>
+            <li>Runs <code>dotnet restore</code></li>
+            <li>Copies all source</li>
+            <li>Publishes Release output</li>
+          </ul>
+          <div class="base-chip">sdk:10.0</div>
+        </article>
+        <div class="stage-arrow">→</div>
+        <article class="stage runtime">
+          <div class="stage-number">2</div>
+          <h3>Runtime stage</h3>
+          <p>Starts from the lean ASP.NET runtime.</p>
+          <ul>
+            <li>Copies published output only</li>
+            <li>Runs without build tools</li>
+            <li>Uses container-provided UID</li>
+            <li>Starts the assembly directly</li>
+          </ul>
+          <div class="base-chip">aspnet:10.0</div>
+        </article>
+      </div>
+      <p class="takeaway"><b>Why it matters:</b> smaller deployment surface and faster restore caching.</p>
+    </section>
+
+    <section class="slide" data-title="OrderService Dockerfile">
+      <div class="section-heading">
+        <p class="eyebrow">src/Services/OrderService/Dockerfile</p>
+        <h2>Build → publish → run</h2>
+      </div>
+      <div class="code-grid">
+        <pre><code><span class="k">FROM</span> mcr.microsoft.com/dotnet/sdk:10.0 <span class="k">AS</span> build
+<span class="k">WORKDIR</span> /src
+
+COPY global.json nuget.config Directory.*.props ./
+COPY src/Services/OrderService/OrderService.csproj ...
+COPY src/Shared/Contracts/Contracts.csproj ...
+COPY src/Shared/Messaging/Messaging.csproj ...
+COPY src/Shared/ServiceDefaults/ServiceDefaults.csproj ...
+
+<span class="k">RUN</span> dotnet restore src/Services/OrderService/OrderService.csproj
+COPY src/ src/
+<span class="k">RUN</span> dotnet publish ... -c Release -o /app --no-restore
+
+<span class="k">FROM</span> mcr.microsoft.com/dotnet/aspnet:10.0
+<span class="k">WORKDIR</span> /app
+COPY --from=build /app .
+<span class="k">USER</span> $APP_UID
+<span class="k">ENTRYPOINT</span> ["dotnet", "OrderService.dll"]</code></pre>
+        <div class="explanation">
+          <article><span>01</span><div><h3>Dependency-aware restore</h3><p>Project files are copied before source, allowing Docker to reuse the NuGet cache.</p></div></article>
+          <article><span>02</span><div><h3>One published artifact</h3><p><code>dotnet publish</code> produces the executable and dependencies in <code>/app</code>.</p></div></article>
+          <article><span>03</span><div><h3>Minimal runtime</h3><p>The SDK stage is excluded from the final image.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="NotificationService Dockerfile">
+      <div class="section-heading">
+        <p class="eyebrow">src/Services/NotificationService/Dockerfile</p>
+        <h2>The same pattern, different entry assembly</h2>
+      </div>
+      <div class="comparison">
+        <div class="comparison-panel">
+          <h3>OrderService</h3>
+          <code>ENTRYPOINT ["dotnet", "OrderService.dll"]</code>
+          <p>Publishes OrderPlaced events through an HTTP API.</p>
+        </div>
+        <div class="comparison-panel">
+          <h3>NotificationService</h3>
+          <code>ENTRYPOINT ["dotnet", "NotificationService.dll"]</code>
+          <p>Runs a background Service Bus subscription processor.</p>
+        </div>
+      </div>
+      <div class="callout">
+        <b>Shared build logic</b>
+        <p>Both Dockerfiles copy the same shared projects—Contracts, Messaging, and ServiceDefaults—then publish their own application project.</p>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Compose: infrastructure">
+      <div class="section-heading">
+        <p class="eyebrow">infra/docker-compose.yaml</p>
+        <h2>The environment is four containers</h2>
+      </div>
+      <div class="compose-grid">
+        <div class="compose-list">
+          <article><span class="dot azure"></span><div><h3>emulator</h3><p>Azure Service Bus emulator</p><code>5672, 5300</code></div></article>
+          <article><span class="dot sql"></span><div><h3>mssql</h3><p>Persistent emulator state</p><code>SQL Server 2022</code></div></article>
+          <article><span class="dot dotnet"></span><div><h3>order-service</h3><p>ASP.NET Core publisher</p><code>5085 → 8080</code></div></article>
+          <article><span class="dot dotnet"></span><div><h3>notification-service</h3><p>Background consumer</p><code>5289 → 8080</code></div></article>
+        </div>
+        <div class="network-card">
+          <div class="network-title">sb-emulator network</div>
+          <div class="network-row"><span>emulator</span><b>sb-emulator</b></div>
+          <div class="network-row"><span>database</span><b>mssql</b></div>
+          <div class="network-row"><span>services</span><b>service names</b></div>
+          <p>Containers resolve peers by name. Host access uses published ports.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Compose: service wiring">
+      <div class="section-heading">
+        <p class="eyebrow">Build, environment & startup</p>
+        <h2>Compose wires source and runtime behavior</h2>
+      </div>
+      <div class="wiring-grid">
+        <article><div class="card-icon">↗</div><h3>Build context</h3><p><code>context: ..</code> with the repository root means Dockerfile paths are relative to the project root.</p></article>
+        <article><div class="card-icon">⚙</div><h3>Environment</h3><p>Both services receive the emulator connection string and Development environment mode.</p></article>
+        <article><div class="card-icon">1→2</div><h3>Startup order</h3><p><code>depends_on</code> starts dependencies but does not verify readiness.</p></article>
+        <article><div class="card-icon">#</div><h3>Ports</h3><p>Only host-facing ports are published. AMQP runs on the shared Docker network.</p></article>
+      </div>
+      <pre class="yaml-snippet"><code>order-service:
+  build:
+    context: ..
+    dockerfile: src/Services/OrderService/Dockerfile
+  ports: ["5085:8080"]
+  environment:
+    SERVICEBUS__CONNECTIONSTRING: "Endpoint=sb://sb-emulator/;..."
+  depends_on: [emulator]
+  networks: [sb-emulator]</code></pre>
+    </section>
+
+    <section class="slide" data-title="Run it">
+      <div class="section-heading">
+        <p class="eyebrow">Local operations</p>
+        <h2>One command starts the system</h2>
+      </div>
+      <div class="run-grid">
+        <div class="terminal">
+          <div class="terminal-bar"><span></span><span></span><span></span><b>PowerShell</b></div>
+          <pre><code><span class="prompt">PS&gt;</span> docker compose -f infra/docker-compose.yaml up --build
+
+<span class="success">✓</span> mssql
+<span class="success">✓</span> servicebus-emulator
+<span class="success">✓</span> order-service
+<span class="success">✓</span> notification-service</code></pre>
+        </div>
+        <div class="endpoint-list">
+          <h3>Endpoints</h3>
+          <a href="#" onclick="return false"><b>Order API</b><span>localhost:5085</span></a>
+          <a href="#" onclick="return false"><b>Notifications</b><span>localhost:5289</span></a>
+          <a href="#" onclick="return false"><b>Emulator</b><span>localhost:5300</span></a>
+          <a href="#" onclick="return false"><b>AMQP</b><span>localhost:5672</span></a>
+        </div>
+      </div>
+      <div class="takeaway final"><b>Key mental model:</b> Dockerfiles define the images; Compose defines the running system.</div>
+    </section>
+
+    <footer class="controls" aria-label="Presentation controls">
+      <button id="prevButton" type="button" aria-label="Previous slide">← Previous</button>
+      <div class="dots" id="slideDots" aria-label="Slide navigation"></div>
+      <button id="nextButton" type="button" aria-label="Next slide">Next →</button>
+    </footer>
+  </main>
+  <script src="/presentation.js"></script>
+</body>
+</html>

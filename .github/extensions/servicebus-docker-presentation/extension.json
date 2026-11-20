@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "initialization": "module",
+  "canvases": [{
+    "id": "servicebus-docker-presentation",
+    "displayName": "Service Bus Docker Presentation",
+    "description": "Presents the OrderService and NotificationService Dockerfiles and Docker Compose configuration."
+  }]
+}
