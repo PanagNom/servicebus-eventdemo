@@ -502,7 +502,7 @@ docker compose down    # removes the containers; the broker starts empty next ti
 
 - [x] **Step 1: containers.** Both services run as containers next to the broker (a Dockerfile per service and one compose file).
 - [x] **Step 2: shared libraries and the new topology** ([docs/milestones/MILESTONE-2.md](docs/milestones/MILESTONE-2.md)). Contracts for all 6 events, one topic per producer with filtered subscriptions, `ServiceDefaults` (`/health`), and a `Messaging` library that does all publishing and consuming. Both services run on it, and all M1 scenarios still pass.
-- [ ] Step 3: a database per service, the outbox and the inbox (this replaces Milestone 7 above)
+- [ ] Step 3: a database per service, the outbox and the inbox ([docs/milestones/MILESTONE-3.md](docs/milestones/MILESTONE-3.md); this replaces Milestone 7 above)
 - [ ] Step 4: Inventory, Payment and Shipping services: a choreographed saga with compensation
 - [ ] Step 5: OpenTelemetry and the Aspire Dashboard
 - [ ] Step 6: README rewrite
